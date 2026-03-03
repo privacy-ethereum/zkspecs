@@ -12,451 +12,311 @@ contributors:
 
 # Change Process
 
-This document is governed by the [1/COSS](../1) (COSS).
+This document is governed by the [1/COSS](https://github.com/privacy-ethereum/zkspecs/tree/main/specs/1) (COSS).
 
 # Language
 
-The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in [RFC 2119](https://www.ietf.org/rfc/rfc2119.txt).
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD",
+"SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be
+interpreted as described in [RFC 2119](https://www.ietf.org/rfc/rfc2119.txt).
 
 # Abstract
 
-This specification defines a privacy-preserving protocol for a BBS server (the Verifier) to grant a one-time "verified human" status to a forum account (the User) without learning personally identifying information from the user's government-issued credential. The User generates a zero-knowledge proof on a client device (web or mobile app) that:
+BBS Human Verification is a privacy-preserving protocol that allows a user to prove possession of a valid issuer-signed credential and obtain a one-time "verified human" status on a BBS platform without disclosing credential attributes.
 
-1. They hold a valid issuer-signed credential of the required type; and
-2. They have not previously registered this credential with the BBS (via a nullifier); and optionally
-3. The proof is bound to the current device/session (device-binding).
+The protocol prevents duplicate verification via a deterministic nullifier and supports two verifier deployments:
+(1) off-chain verification by a BBS backend; and
+(2) an on-chain registry variant that publicly records nullifier usage.
 
-The Verifier checks the proof and updates its user database with a boolean `vcVerified` flag.
-
-This protocol follows OpenAC's split between (a) an offline Prepare proof (amortized per credential) and (b) an online Show proof per presentation, with re-randomization to prevent linkability across presentations.
+This version (v0.1) enforces one verification per credential instance. If the credential is periodically renewed and renewal modifies the credential contents, the user MAY be able to verify again (known limitation).
 
 # Motivation
 
-Current identity verification methods for online forums and bulletin board systems require users to expose sensitive personal data, creating privacy risks and discouraging participation. This protocol addresses the following challenges:
+Online communities and BBS-style platforms often require human verification to reduce Sybil attacks and automated abuse. Traditional verification methods require revealing personal information to the platform.
 
-- **Privacy-preserving human verification**: Users can prove they hold a valid government-issued credential without revealing any personal attributes (name, ID number, date of birth, address, etc.).
-- **Sybil resistance**: A nullifier mechanism prevents the same credential from being used to verify multiple accounts on the same deployment.
-- **Issuer compatibility**: The protocol works with existing government credential issuance systems (e.g., Taiwan's Citizen Digital Certificate) without requiring modifications to the issuer's infrastructure.
-- **Client-side proving**: All proof generation runs on user-controlled hardware (web browser or mobile device), ensuring sensitive credential data never leaves the user's device.
+This specification defines a primitive that separates eligibility verification (possession of a valid credential) from identity disclosure by using a zero-knowledge proof.
 
 # Specification
-
-## Roles
-
-- **Issuer (I)**: Government or authorized authority that issues the credential and signs it (unmodified existing system).
-- **Holder / User (U)**: Person who possesses the credential and wants BBS verification.
-- **Prover (P)**: Software running on user hardware (web app or mobile app) that constructs ZK proofs.
-- **Verifier / BBS Server (V)**: BBS-style service backend that verifies proofs and updates account state.
 
 ## System Requirements
 
 Implementations MUST provide:
 
-### 1. Credential Parsing
+### 1. Credential Model
 
-The credential format MAY be SD-JWT-like, JWT-wrapped, or another container, as long as:
+A credential `S` is a structured message containing attributes `m` and an issuer signature `σ`.
 
-- The prover can extract a canonical ordered attribute vector `m = (m_1 ... m_n)`.
-- The issuer signature `σ_I` can be verified over an authenticated payload representation (e.g., hashes of salted claims), consistent with OpenAC's wrapper/normalization model.
+The issuer public key `PK_I` MUST be available to verifiers via one of:
+- hardcoded trust anchor(s),
+- a platform-managed allowlist, or
+- an on-chain key registry (see [On-Chain Registry Variant](#on-chain-registry-variant)).
 
-### 2. Commitment Scheme
+The credential type MUST be representable as `cred_scope` and MUST be derivable from `m` via `Type(m)`.
 
-The prover commits to `m` using a binding and hiding commitment scheme `Com(m; r)`.
+### 2. Challenge (Anti-replay)
 
-OpenAC's architecture uses a vector commitment (Hyrax/Pedersen-style) so that the same committed witness can be linked between the Prepare and Show proofs while keeping the credential attributes hidden.
+Verifiers MUST provide a 256-bit `challenge` value per verification attempt.
 
-### 3. Issuer Signature Verification in ZK
+- Challenges MUST be unpredictable.
+- Challenges MUST expire (implementation-defined).
+- Verifiers MUST reject proofs bound to expired challenges.
 
-The circuit MUST verify that the credential's issuer signature is valid under a trusted issuer public key. The specific signature scheme depends on the credential system:
+### 3. Nullifier
 
-- For Taiwan's Citizen Digital Certificate: SHA256withRSA (OID: 1.2.840.113549.1.1.11).
-- Other deployments MAY use different schemes as appropriate.
+The protocol MUST output a deterministic nullifier to prevent duplicate verification.
 
-Only the end-entity certificate to intermediate CA link needs to be verified in-circuit; root CA to intermediate CA verification MAY be performed off-chain.
+In v0.1, the nullifier is derived from credential contents:
 
-### 4. Nullifier Generation
 
-A nullifier is a deterministic value derived from credential secrets and a domain separator, used to prevent duplicate registration.
+nullifier := H( Encode(app_id) || Encode(cred_scope) || Encode(S) )
 
-```
-nullifier = H(app_id || cred_scope || cred_secret)
-```
 
 Where:
+- `app_id` is a platform identifier (domain separator),
+- `cred_scope` is a credential type identifier,
+- `H` is a hash function defined in [Cryptographic Primitives](#cryptographic-primitives).
 
-- `app_id`: A domain separator for the relying party deployment. MUST be unique per deployment.
-- `cred_scope`: A string constant for credential type (e.g., `"TW_CITIZENSHIP_CERT"`).
-- `cred_secret`: A credential-unique secret that the prover can derive (e.g., an issuer-provided random field, or a stable attribute combined with a wallet-held salt).
+Each platform MUST use a unique `app_id`.
 
-The Verifier MUST store accepted nullifier values. If a submitted nullifier already exists, the Verifier MUST reject the registration attempt.
+## Cryptographic Primitives
 
-### 5. Session Challenge
+This specification defines:
 
-The Verifier issues a fresh challenge `ch` per registration attempt. The prover includes `ch` as a public input to the Show proof. The challenge MUST be unpredictable and MUST expire.
+- Hash function: `H = SHA-256`.
+- Signature verification: `VerifySig(PK, msg, σ) -> {0,1}`.
+- Encoding: `Encode()` is a deterministic canonical encoding function.
+
+Concatenation MUST be length-prefixed (e.g., `len(x)||x||len(y)||y||...`) to avoid ambiguity.
 
 ## Protocol Flow
 
-### Web-based Approach
+Implementations MUST:
 
-1. User obtains a credential from the Issuer (e.g., via card reader or mobile certificate API).
-2. Web app fetches credential data and wraps it into a VC container for proof input.
-3. Web app generates ZKP (OpenAC-style) client-side using WASM.
-4. Web app submits proof bundle to BBS server.
-5. BBS server verifies proof and updates user record (`vcVerified = true` or `failed`).
-
-### Mobile-based Approach
-
-Same as above, but the prover runs inside a mobile app using native ZK bindings (e.g., mopro-ffi).
-
-### Verifier Challenge (Step 1)
-
-Endpoint: `GET /v1/human-verification/challenge`
-
-Response:
-
-```json
-{
-  "challenge": "<random bytes, base64>",
-  "expires_at": "<timestamp>",
-  "app_id": "<relying party domain separator>",
-  "policy": "<statement of what is being proven>"
-}
-```
-
-### Proof Submission (Step 2)
-
-Endpoint: `POST /v1/human-verification/submit`
-
-Request: ProofBundle (see [Data Structures](#data-structures))
-
-The Verifier checks (in order):
-
-1. Challenge is valid and unexpired.
-2. Verify `prepare_proof` (if present) OR verify a combined proof variant.
-3. Verify `show_proof` against: challenge, `app_id`, and policy constraints (credential type, etc.).
-4. Check nullifier is not already registered.
-
-On success:
-
-- Insert nullifier into nullifier set.
-- Set `user.vcVerified = true`.
-
-On failure:
-
-- Return error with appropriate error code.
+1. Obtain `challenge`, `app_id`, and `cred_scope` from the verifier context.
+2. Construct circuit inputs from the credential `S` and signature `σ`.
+3. Generate a proof for the statement in [Circuit Design](#circuit-design).
+4. Submit the proof and public inputs to the verifier.
 
 ## Circuit Design
 
-This spec mirrors OpenAC's split: Prepare relation (amortized) and Show relation (per session).
+### Private Inputs
 
-### Prepare Relation (Offline, Reusable)
+- `S`: Credential message.
+- `σ`: Issuer signature over `S`.
+- `m`: Attributes parsed from `S` such that `Parse(S) = m`.
 
-The Prover proves knowledge of a credential `S` and witness `m` such that:
+### Public Inputs
 
-1. `Parse(S) = (m, aux)`
-2. `VerifyIssuerSignature(PK_I, S) = 1`
-3. `C = Com(m; r)` is correctly formed
+- `challenge: bytes32`
+- `app_id: <encoded string>`
+- `cred_scope: <encoded string>`
+- `nullifier: bytes32`
 
-#### Private Inputs
+### Circuit Operations
 
-- `S`: Credential (signed payload from issuer)
-- `m`: Attribute vector extracted from the credential
-- `r`: Commitment randomness
+The circuit MUST enforce:
 
-#### Public Inputs
+1. **Issuer signature verification**
 
-- `PK_I`: Issuer public key or trust anchor reference
-- `C`: Commitment to the attribute vector
 
-#### Outputs
+isValid := VerifySig(PK_I, Encode(S), σ)
+assert(isValid == 1)
 
-- `commitment`: `C`
-- `prepare_proof`: The zero-knowledge proof
 
-This proof MAY be precomputed and cached. Multiple uses employ re-randomized commitments to prevent linkability across presentations.
+2. **Credential parsing**
 
-### Show Relation (Online, Per Session)
 
-Given a commitment `C` linked to the Prepare proof, a verifier challenge `ch`, and policy inputs:
+Parse(S) = m
 
-The Prover proves:
 
-1. **Policy compliance**: `Policy(m) = 1` for the relying party policy. For the one-time human verification policy, this means the credential is of the required type (`cred_scope`). Optionally: validity time window, nationality/age predicates.
-2. **Nullifier correctness**: `nullifier = H(app_id || cred_scope || cred_secret)` is correctly computed from hidden values derived from `m`.
-3. **Challenge binding**: `ch` is included as a public input (anti-replay).
-4. **Device binding** (optional): `VerifyDeviceSig(PK_D, Sig(SK_D, ch)) = 1`, binding the session to a device key.
+3. **Credential type constraint**
 
-#### Private Inputs
 
-- Credential attributes `m` (via commitment opening)
-- `cred_secret` (for nullifier derivation)
-- Device private key `SK_D` (if device-binding is enabled)
+assert(Type(m) == cred_scope)
 
-#### Public Inputs
 
-- `C`: Commitment (or commitment reference)
-- `ch`: Verifier challenge
-- `app_id`: Relying party domain separator
-- `cred_scope`: Credential type constant
-- `nullifier`: Computed nullifier value
-- `PK_D`: Device public key (if device-binding is enabled)
+4. **Nullifier derivation**
 
-#### Outputs
 
-- `show_proof`: The zero-knowledge proof
+nullifier := SHA256( Encode(app_id) || Encode(cred_scope) || Encode(S) )
 
-### Linking Prepare and Show
 
-The Verifier MUST enforce that the Show proof operates over the same committed witness as the Prepare proof. Both proofs MUST reference the same commitment `C`, or include compatible commitment openings whose equality can be checked.
+5. **Challenge binding**
 
-### Proof Generation
+The proof MUST bind to `challenge` as a public input.
 
-#### Prover MUST
+### Outputs
 
-- Validate the credential signature before proof generation.
-- Generate a correct nullifier scoped to the relying party.
-- Include the verifier's challenge as a public input.
-- Generate a valid zero-knowledge proof.
+- `nullifier: bytes32`
 
-#### Prover MAY
+## Proof Output Format
 
-- Cache the Prepare proof and reuse it across sessions with re-randomized commitments.
-- Include device-binding by signing the challenge with a device key.
+Implementations MUST serialize proof outputs in a deterministic format.
 
-### Proof Verification
+A minimal proof object SHOULD include:
 
-#### Verifier MUST
-
-- Validate the zero-knowledge proof(s).
-- Verify the issuer public key is in the trusted key set.
-- Verify the challenge is valid and unexpired.
-- Check the nullifier against the stored nullifier set.
-
-#### Verifier SHOULD
-
-- Maintain an allowlist of acceptable issuer keys or key identifiers.
-- Log verification failures for operational monitoring.
-
-#### Verifier MAY
-
-- Verify device-binding signatures if the deployment requires it.
-- Use a Merkle root / trust list root for issuer key verification (better privacy if multiple issuers exist).
-
-## Data Structures
-
-### ProofBundle
-
-```json
+```text
 {
-  "version": "zk-human-verif-raw-0",
-  "app_id": "<relying party identifier>",
-  "cred_scope": "<credential type, e.g. TW_CITIZENSHIP_CERT>",
-  "challenge": "<base64>",
-  "nullifier": "<hex or base64>",
-  "commitment": "<hex or base64>",
-  "prepare_proof": "<base64>",
-  "show_proof": "<base64>",
-
-  "device_binding": {
-    "enabled": false,
-    "device_pubkey": "<base64>",
-    "device_sig_over_challenge": "<base64>"
-  },
-
-  "meta": {
-    "prover": "web | android | ios",
-    "prover_build": "<optional build identifier>",
-    "timestamp": 0
-  }
+  app_id: <string>,
+  cred_scope: <string>,
+  challenge: bytes32,
+  nullifier: bytes32,
+  proof: bytes
 }
 ```
 
-Notes:
+## Proof Verification
 
-- `prepare_proof` MAY be omitted if using a single combined proof, but the split is RECOMMENDED for performance and architecture clarity.
-- `device_binding.enabled = false` is allowed if the threat model does not require it for one-time verification.
+### Verifier MUST
 
-### Verifier Database Schema
+- Validate the zero-knowledge proof against the public inputs.
+- Validate challenge freshness (not expired).
+- Enforce `app_id` and `cred_scope` match the expected policy for the verification endpoint.
 
-The BBS server MUST store at minimum:
+### Verifier SHOULD
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id_verified` | boolean | Whether the user has been verified |
-| `id_nullifier` | string | The accepted nullifier value |
-| `id_proof` | string (optional) | The stored proof for audit |
+- Check whether the nullifier has already been used and reject duplicates.
+
+### Verifier MAY
+
+- Maintain a history of recently-valid challenges for resilience (implementation-defined), provided replay protection remains intact.
 
 ## Error Handling
 
 Implementations MUST handle:
 
-1. Invalid or expired challenge
-2. Invalid proof (Prepare or Show)
-3. Duplicate nullifier
-4. Untrusted issuer key
-5. Invalid device-binding signature (if enabled)
+- Invalid proof
+- Invalid or expired challenge
+
+Implementations SHOULD handle:
+
+- Duplicate nullifier
 
 Error responses MUST include:
 
-1. Error code
-2. Error message
-3. Error details (when available)
+- Error code
+- Error message
+- Error details (when available)
+
+## Interoperability Constraints
+
+- Implementations MUST use the same `Encode()` canonicalization rules to ensure nullifier consistency across verifiers.
+- Implementations MUST use the same `H` function (SHA-256) for nullifier derivation in v0.1.
+- Implementations MUST agree on `cred_scope` values and how `Type(m)` is derived.
+
+## Credential Renewal
+
+In v0.1, the nullifier is derived from `Encode(S)`.
+
+If the issuer renews/reissues credentials such that `S` changes, then the nullifier may change. Therefore a user MAY be able to verify again after renewal.
+
+This is a known limitation of v0.1.
+
+A future version MAY derive nullifiers from a renewal-stable holder secret:
+
+```
+nullifier := H( Encode(app_id) || holder_secret )
+```
+
+## On-Chain Registry Variant
+
+In the on-chain verification mode, a smart contract MAY act as the verifier and registry.
+
+A contract MUST maintain:
+
+```
+mapping(bytes32 => bool) nullifierUsed
+```
+
+A contract MAY additionally store `PK_I` (issuer public key) or a commitment to an issuer allowlist.
+
+Verification procedure:
+
+1. Verify the zero-knowledge proof.
+2. Ensure `nullifierUsed[nullifier] == false`.
+3. Set `nullifierUsed[nullifier] = true`.
+4. Emit an event:
+
+```
+VerificationRegistered(nullifier, app_id)
+```
+
+No credential attributes MUST be stored on-chain.
 
 # Security Considerations
 
-## Threat Model
+## Privacy and Security Assumptions
 
 The protocol assumes:
 
-- **Prover may be malicious**: May attempt to forge verification or register multiple accounts.
-- **Verifier is honest-but-curious**: Verifies correctly but may try to correlate sessions or exfiltrate identifying data.
-- **Network attacker**: May attempt to replay old proofs (mitigated by challenge binding).
-- **Proven security of the used proving system**, and the trusted setup of the circuit if required by the proving system being used.
-- **Trusted issuer key**: The issuer's private key is assumed to be secure and will not sign illegitimate credentials.
+- The security of the proving system used (and its trusted setup requirements, if applicable).
+- The unforgeability of the issuer signature scheme.
+- Collision resistance of SHA-256.
+- Correct and unique domain separation via `app_id`.
+- Correct canonical encoding via `Encode()`.
 
-## Replay Resistance
+## Privacy and Security Best Practices
 
-The Show proof MUST bind to the verifier's challenge. The Verifier MUST reject expired challenges.
-
-## Duplicate Registration Resistance
-
-The Verifier MUST maintain a set of accepted nullifiers. If one person should only verify one BBS account, then the nullifier MUST be unique per credential per deployment (scoped by `app_id`).
+- Proof generation SHOULD be performed on the user's device to reduce risk of credential exposure.
+- Verifiers SHOULD minimize logging of public inputs, particularly nullifier, to reduce metadata retention.
+- Deployments using the on-chain registry SHOULD use relayers or transaction sponsorship to reduce linkage between proof submissions and wallet addresses.
 
 ## Linkability
 
-If the same commitment/proof material is reused across multiple presentations, verifiers can link sessions. The prover SHOULD re-randomize (or consume one-time prepared states) to avoid linkability, consistent with OpenAC's reblind approach.
+### Off-chain mode
 
-## Nullifier Privacy
+In off-chain mode, the nullifier is only visible to the BBS platform verifier.
 
-A nullifier is a stable identifier within the relying party scope. This is an explicit trade-off:
+### On-chain mode
 
-- It prevents duplicate registration.
-- It introduces a stable per-deployment token.
+In on-chain mode:
 
-Mitigations:
-
-- Strong domain separation (`app_id`) so nullifiers cannot be correlated across relying parties.
-- `cred_secret` SHOULD NOT be a raw personal ID attribute unless combined with a wallet-held secret (e.g., `cred_secret = H(stable_attribute || wallet_secret)`).
-
-## Device-Binding Trade-offs
-
-Device-binding helps against credential sharing but can harm usability (device change) and complicate privacy. For one-time verification, deployments MAY choose:
-
-- **No device-binding**: Simpler; relies on nullifier uniqueness alone.
-- **Soft binding**: Device signature over challenge, but allow re-verification on new device via support flow.
-- **Hard binding**: Strong anti-sharing, but more operational complexity.
-
-## Issuer Trust Model
-
-The Verifier MUST have an allowlist/trust store for acceptable issuer keys. Two approaches:
-
-- **Direct key**: `PK_I` is hardcoded or configured (simple, but can leak issuer identity if multiple issuers exist).
-- **Merkle root / trust list root**: The prover proves issuer key membership in an allowlisted root (better privacy if issuer identity matters).
+- Nullifiers are publicly observable.
+- Verification timing is public.
+- Transaction sender addresses may be linkable.
+- Domain separation via `app_id` is REQUIRED, but does not eliminate all metadata leakage.
 
 ## Known Limitations
 
-- **Credential format dependency**: The protocol depends on the ability to parse and verify issuer signatures within ZK circuits. Changes to the issuer's credential format require circuit updates.
-- **One-person-one-account limitation**: The protocol cannot fully guarantee "one natural person = one BBS account" across all possible collusion and device-sharing scenarios. This is policy-dependent and may require stronger binding.
+**Renewal limitation (v0.1)**
+If credential renewal changes `S`, a user MAY verify again.
 
-## Privacy Guarantees
-
-The protocol MUST guarantee:
-
-1. That the Verifier cannot learn raw credential attributes (name, ID number, DOB, address, etc.) from the proof.
-2. That the nullifier cannot be used to track users across different relying parties (due to `app_id` scoping).
+**Credential sharing (v0.1)**
+This version does not include device binding. Credential sharing across devices is not cryptographically prevented.
 
 # Implementation Notes
 
-The reference implementation targets a PTT-like BBS deployment with the following technology stack:
+A reference implementation MAY:
 
-**Client-side (Web)**:
-- OpenAC compiled to WASM via `mopro build` with wasm target
-- Credential data fetched via card reader (HiPKI local server at `http://127.0.0.1:61161/sign`) or mobile certificate API
+- generate proofs client-side (web or native app),
+- verify proofs off-chain in a backend, and/or
+- verify proofs in an EVM verifier contract for the on-chain registry variant.
 
-**Client-side (Mobile)**:
-- OpenAC via mopro-ffi bindings (Swift for iOS, Kotlin for Android)
-- Integration with existing BBS mobile apps (e.g., Ptt-iOS, Ptt-Android)
+Implementations SHOULD provide test vectors for:
 
-**Server-side**:
-- Go backend with Rust FFI for OpenAC verification (via rust2go)
-
-**Proof generation (Web)**:
-
-```javascript
-// 1. Fetch credential data from card reader or mobile API
-const signResponse = await fetch('http://127.0.0.1:61161/sign', {
-  method: 'POST',
-  body: JSON.stringify({ tbs: challengeHash, hashAlgorithm: 'SHA256' })
-});
-
-// 2. Extract credential data
-const { certb64, signature } = await signResponse.json();
-
-// 3. Generate ZK proof client-side (WASM)
-const proof = await generateProof({
-  credential: certb64,
-  signature: signature,
-  challenge: serverChallenge,
-  appId: 'ptt-mainnet',
-  credScope: 'TW_CITIZENSHIP_CERT'
-});
-
-// 4. Submit proof bundle to BBS server
-await fetch('/v1/human-verification/submit', {
-  method: 'POST',
-  body: JSON.stringify(proof)
-});
-```
-
-For the current implementation status and source code, see the [reference repository](https://github.com/zkmopro/ZK-based-Human-Verification).
-
-# Extensions
-
-## Revocation / Status Checks
-
-Add a predicate `NotRevoked(m, status_root)` proven in Show, where `status_root` comes from an external status list. This can remain out-of-circuit in a first iteration, matching the initial one-time use case.
-
-## On-chain Nullifier Registry
-
-Instead of (or in addition to) a server-side nullifier database, publish accepted nullifiers on-chain:
-
-- **Pros**: Public auditability; reuse across other relying parties; censorship-resistance.
-- **Cons**: Fees; public metadata; contract upgrade concerns; privacy trade-offs.
-
-This can be designed so the on-chain registry only stores nullifiers and minimal metadata.
+- `Encode()` canonicalization,
+- nullifier derivation,
+- signature verification inputs.
 
 # References
 
-1. [OpenAC: Anonymous Credentials from ZK](https://github.com/privacy-ethereum/zkID) - PSE zkID team
-2. [ZK-based Human Verification Repository](https://github.com/zkmopro/ZK-based-Human-Verification)
-3. [mopro - Client-side ZK proving on mobile](https://github.com/zkmopro/mopro)
-4. [RFC 2119 - Key words for use in RFCs](https://www.ietf.org/rfc/rfc2119.txt)
-5. [Taiwan Citizen Digital Certificate (MOICA)](https://moica.nat.gov.tw/)
-6. [HiPKI Local Signing Server](https://publicca.hinet.net/HiPKI-01.htm)
-7. [rust2go - Rust to Go FFI](https://github.com/ihciah/rust2go)
+- [RFC 2119](https://www.ietf.org/rfc/rfc2119.txt)
+- [FIPS 180-4 (SHA-256)](https://csrc.nist.gov/publications/detail/fips/180/4/final)
 
-# Appendix A: Open Questions
+# Glossary
 
-The following items need to be resolved as this specification matures:
+## BBS Platform
 
-1. **Credential type and container**: What exactly is `S`? (SD-JWT VC? Custom JWT wrapper? Raw payload + signature?)
-2. **Issuer signature scheme in circuit**: RSA vs ECDSA P-256 vs other? (Affects circuit complexity.)
-3. **Nullifier secret source**: What is `cred_secret` for nullifier derivation? (Issuer-provided random? Wallet secret + stable attribute? Something else?)
-4. **Device-binding requirement**: If required, what is the device key source? (Secure enclave key? Embedded key in credential? Wallet key?)
-5. **Account re-binding**: Do we require "one credential = one account" strictly, or allow re-binding if account is lost?
-6. **Failure semantics**: Should `vcVerified = failed` be stored, or treat failures as transient?
+A forum-like application that may maintain per-user status or badges.
 
-# Appendix B: Trusted Issuer Certificate Chain (Taiwan)
+## Credential
 
-For the Taiwan Citizen Digital Certificate deployment:
+Issuer-signed message `S` containing attributes `m`.
 
-| Level | Subject | Thumbprint |
-|-------|---------|------------|
-| Root CA | `C=TW, O=Government Root Certification Authority` | `B091AA91...` |
-| Intermediate CA | `C=TW, O=行政院, OU=內政部憑證管理中心` | `2797EFFF...` |
+## Nullifier
 
-The in-circuit verification checks the end-entity certificate against the intermediate CA. Root CA to intermediate CA verification is performed off-chain.
+A deterministic value derived in zero-knowledge and used to prevent duplicate verification.
 
-# Copyright
+## Challenge
 
-Copyright and related rights waived via [CC0](https://creativecommons.org/publicdomain/zero/1.0/).
+A verifier-provided nonce bound to the proof to prevent replay.
