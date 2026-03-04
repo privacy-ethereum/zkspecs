@@ -1,7 +1,7 @@
 ---
 slug: 5
 title: 5/ZK-HUMAN-VERIFICATION
-name: ZK-based Human Verification for BBS
+name: ZK-based Human Verification for Bulletin Board System (BBS)
 status: raw
 category: Standards Track
 tags: zero-knowledge, identity, privacy, anonymous-credentials, human-verification
@@ -22,7 +22,7 @@ interpreted as described in [RFC 2119](https://www.ietf.org/rfc/rfc2119.txt).
 
 # Abstract
 
-BBS Human Verification is a privacy-preserving protocol that allows a user to prove possession of a valid issuer-signed credential and obtain a one-time "verified human" status on a BBS platform without disclosing credential attributes.
+Bulletin Board System (BBS) Human Verification is a privacy-preserving protocol that allows a user to prove possession of a valid issuer-signed credential and obtain a one-time "verified human" status on a BBS platform without disclosing credential attributes.
 
 The protocol prevents duplicate verification via a deterministic nullifier and supports two verifier deployments:
 (1) off-chain verification by a BBS backend; and
@@ -44,14 +44,14 @@ Implementations MUST provide:
 
 ### 1. Credential Model
 
-A credential `S` is a structured message containing attributes `m` and an issuer signature `σ`.
+A credential `S` is a structured message containing a subject distinguished name (`subjectDN`), attributes `m`, and an RSA signature `σ` over the TBS (To-Be-Signed) certificate data.
 
-The issuer public key `PK_I` MUST be available to verifiers via one of:
-- hardcoded trust anchor(s),
-- a platform-managed allowlist, or
-- an on-chain key registry (see [On-Chain Registry Variant](#on-chain-registry-variant)).
+The credential MUST be issued by a trusted Certificate Authority (CA). The issuer's public key `PK_I` MUST be verifiable through a certificate chain rooted in one of:
+- hardcoded trusted CA root certificates (e.g., government root CA),
+- a platform-managed CA allowlist, or
+- an on-chain CA key registry (see [On-Chain Registry Variant](#on-chain-registry-variant)).
 
-The credential type MUST be representable as `cred_scope` and MUST be derivable from `m` via `Type(m)`.
+Implementations MUST validate that the end-entity certificate was signed by a trusted CA public key.
 
 ### 2. Challenge (Anti-replay)
 
@@ -65,16 +65,16 @@ Verifiers MUST provide a 256-bit `challenge` value per verification attempt.
 
 The protocol MUST output a deterministic nullifier to prevent duplicate verification.
 
-In v0.1, the nullifier is derived from credential contents:
+The nullifier is derived from the subject distinguished name:
 
-
-nullifier := H( Encode(app_id) || Encode(cred_scope) || Encode(S) )
-
+```
+nullifier := Poseidon( Encode(app_id || subjectDN) )
+```
 
 Where:
 - `app_id` is a platform identifier (domain separator),
-- `cred_scope` is a credential type identifier,
-- `H` is a hash function defined in [Cryptographic Primitives](#cryptographic-primitives).
+- `subjectDN` is the subject distinguished name extracted from the credential,
+- `Poseidon` is the Poseidon hash function (see [Cryptographic Primitives](#cryptographic-primitives)).
 
 Each platform MUST use a unique `app_id`.
 
@@ -82,8 +82,9 @@ Each platform MUST use a unique `app_id`.
 
 This specification defines:
 
-- Hash function: `H = SHA-256`.
-- Signature verification: `VerifySig(PK, msg, σ) -> {0,1}`.
+- Hash function (data integrity): `SHA-256` for certificate TBS data hashing.
+- Hash function (nullifier): `Poseidon` hash, a ZK-friendly hash function optimized for arithmetic circuits (see [circomlib Poseidon](https://github.com/iden3/circomlib/blob/master/circuits/poseidon.circom)).
+- Signature verification: `RSA_Verify(PK, msg, σ) -> {0,1}` — RSA signature verification over SHA-256 hashed TBS data.
 - Encoding: `Encode()` is a deterministic canonical encoding function.
 
 Concatenation MUST be length-prefixed (e.g., `len(x)||x||len(y)||y||...`) to avoid ambiguity.
@@ -92,8 +93,8 @@ Concatenation MUST be length-prefixed (e.g., `len(x)||x||len(y)||y||...`) to avo
 
 Implementations MUST:
 
-1. Obtain `challenge`, `app_id`, and `cred_scope` from the verifier context.
-2. Construct circuit inputs from the credential `S` and signature `σ`.
+1. Obtain `challenge` and `app_id` from the verifier context.
+2. Construct circuit inputs from the credential `S`, RSA signature `σ`, and trusted CA public keys.
 3. Generate a proof for the statement in [Circuit Design](#circuit-design).
 4. Submit the proof and public inputs to the verifier.
 
@@ -101,47 +102,44 @@ Implementations MUST:
 
 ### Private Inputs
 
-- `S`: Credential message.
-- `σ`: Issuer signature over `S`.
-- `m`: Attributes parsed from `S` such that `Parse(S) = m`.
+- `S`: Credential message (certificate data).
+- `σ`: RSA signature over the TBS (To-Be-Signed) data.
+- `subjectDN`: Subject distinguished name extracted from `S`.
+- `PK_cert`: Public key extracted from the end-entity certificate.
 
 ### Public Inputs
 
 - `challenge: bytes32`
 - `app_id: <encoded string>`
-- `cred_scope: <encoded string>`
 - `nullifier: bytes32`
+- `PK_CA`: Trusted CA public key(s) (root and/or intermediate CA).
 
 ### Circuit Operations
 
 The circuit MUST enforce:
 
-1. **Issuer signature verification**
+1. **Certificate chain validation**
 
+Confirm that the end-entity certificate was issued by a trusted CA:
 
-isValid := VerifySig(PK_I, Encode(S), σ)
+```
+isValid := RSA_Verify(PK_CA, TBS(S), σ)
 assert(isValid == 1)
+```
 
+2. **Subject DN extraction**
 
-2. **Credential parsing**
+```
+subjectDN := ExtractSubjectDN(S)
+```
 
+3. **Nullifier derivation**
 
-Parse(S) = m
+```
+nullifier := Poseidon( Encode(app_id || subjectDN) )
+```
 
-
-3. **Credential type constraint**
-
-
-assert(Type(m) == cred_scope)
-
-
-4. **Nullifier derivation**
-
-
-nullifier := SHA256( Encode(app_id) || Encode(cred_scope) || Encode(S) )
-
-
-5. **Challenge binding**
+4. **Challenge binding**
 
 The proof MUST bind to `challenge` as a public input.
 
@@ -158,7 +156,6 @@ A minimal proof object SHOULD include:
 ```text
 {
   app_id: <string>,
-  cred_scope: <string>,
   challenge: bytes32,
   nullifier: bytes32,
   proof: bytes
@@ -171,7 +168,7 @@ A minimal proof object SHOULD include:
 
 - Validate the zero-knowledge proof against the public inputs.
 - Validate challenge freshness (not expired).
-- Enforce `app_id` and `cred_scope` match the expected policy for the verification endpoint.
+- Enforce `app_id` matches the expected policy for the verification endpoint.
 
 ### Verifier SHOULD
 
@@ -201,21 +198,19 @@ Error responses MUST include:
 ## Interoperability Constraints
 
 - Implementations MUST use the same `Encode()` canonicalization rules to ensure nullifier consistency across verifiers.
-- Implementations MUST use the same `H` function (SHA-256) for nullifier derivation in v0.1.
-- Implementations MUST agree on `cred_scope` values and how `Type(m)` is derived.
+- Implementations MUST use the same Poseidon hash configuration for nullifier derivation.
+- Implementations MUST use the same RSA verification parameters (key size, padding scheme) for certificate chain validation.
 
 ## Credential Renewal
 
-In v0.1, the nullifier is derived from `Encode(S)`.
+The nullifier is derived from `subjectDN`, which is stable across credential renewals as long as the subject identity remains the same.
 
-If the issuer renews/reissues credentials such that `S` changes, then the nullifier may change. Therefore a user MAY be able to verify again after renewal.
-
-This is a known limitation of v0.1.
+If the issuer renews/reissues credentials such that `subjectDN` changes, then the nullifier will change. Therefore a user MAY be able to verify again after renewal with a different `subjectDN`.
 
 A future version MAY derive nullifiers from a renewal-stable holder secret:
 
 ```
-nullifier := H( Encode(app_id) || holder_secret )
+nullifier := Poseidon( Encode(app_id || holder_secret) )
 ```
 
 ## On-Chain Registry Variant
@@ -243,6 +238,8 @@ VerificationRegistered(nullifier, app_id)
 
 No credential attributes MUST be stored on-chain.
 
+Implementations MUST NOT store proofs on-chain for later reuse. Each verification MUST generate a fresh proof bound to a new challenge.
+
 # Security Considerations
 
 ## Privacy and Security Assumptions
@@ -250,8 +247,8 @@ No credential attributes MUST be stored on-chain.
 The protocol assumes:
 
 - The security of the proving system used (and its trusted setup requirements, if applicable).
-- The unforgeability of the issuer signature scheme.
-- Collision resistance of SHA-256.
+- The unforgeability of the RSA signature scheme used for certificate signing.
+- Collision resistance of SHA-256 (for TBS hashing) and Poseidon (for nullifier derivation).
 - Correct and unique domain separation via `app_id`.
 - Correct canonical encoding via `Encode()`.
 
@@ -279,7 +276,7 @@ In on-chain mode:
 ## Known Limitations
 
 **Renewal limitation (v0.1)**
-If credential renewal changes `S`, a user MAY verify again.
+If credential renewal changes `subjectDN`, a user MAY verify again.
 
 **Credential sharing (v0.1)**
 This version does not include device binding. Credential sharing across devices is not cryptographically prevented.
@@ -302,6 +299,8 @@ Implementations SHOULD provide test vectors for:
 
 - [RFC 2119](https://www.ietf.org/rfc/rfc2119.txt)
 - [FIPS 180-4 (SHA-256)](https://csrc.nist.gov/publications/detail/fips/180/4/final)
+- [Poseidon Hash (circomlib)](https://github.com/iden3/circomlib/blob/master/circuits/poseidon.circom)
+- [ZK Circuit Specification for Human Verification (prior art)](https://github.com/zkmopro/ZK-based-Human-Verification/issues/3)
 
 # Glossary
 
@@ -311,7 +310,7 @@ A forum-like application that may maintain per-user status or badges.
 
 ## Credential
 
-Issuer-signed message `S` containing attributes `m`.
+A CA-signed certificate `S` containing a subject distinguished name (`subjectDN`), attributes `m`, and an RSA signature `σ`.
 
 ## Nullifier
 
