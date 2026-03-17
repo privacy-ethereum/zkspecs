@@ -46,7 +46,10 @@ Implementations MUST provide:
 
 ### 1. Certificate Model
 
-A certificate `S` is a structured message containing a subject distinguished name (`subjectDN`), attributes `m`, and an RSA signature `σ` over the TBS (To-Be-Signed) certificate data.
+A certificate `S` is a structured message containing a subject distinguished name (`subjectDN`), a subject number (`sn`), attributes `m`, and an RSA signature `σ` over the TBS (To-Be-Signed) certificate data.
+
+- `subjectDN`: A secret unique identifier assigned by the issuing CA. Used for nullifier derivation.
+- `sn` (subject number): A distinct field from `subjectDN`, used as the key for revocation lookups. The `sn` does not directly reveal the prover's identity.
 
 The certificate MUST be issued by a trusted Certificate Authority (CA). The issuer's public key `PK_I` MUST be verifiable through a certificate chain rooted in one of:
 - hardcoded trusted CA root certificates (e.g., government root CA),
@@ -66,10 +69,20 @@ The protocol MUST support certificate revocation via a **non-inclusion proof** a
 A revocation list is maintained as a **Sparse Merkle Tree (SMT)** where each leaf corresponds to a revoked certificate identifier:
 
 ```
-revoked_leaf := Poseidon( Encode(subjectDN) )
+revoked_leaf := Poseidon( Encode(sn) )
 ```
 
-The SMT root (`revocation_root`) is published by the CA or a trusted updater. Provers demonstrate their certificate has not been revoked by providing a non-inclusion witness against the current `revocation_root`.
+The verifier maintains the full SMT off-chain, constructed from the CA's Certificate Revocation List (CRL) or an equivalent revocation feed. The verifier MUST periodically fetch the latest CRL from the CA or a trusted updater and rebuild the SMT accordingly. Only the SMT root (`revocation_root`) is stored on-chain in a smart contract (or distributed off-chain by the CA).
+
+The prover trusts that the verifier keeps the revocation tree up to date. This trust assumption is documented in [Security Considerations](#revocation-freshness).
+
+#### Witness Retrieval
+
+To obtain a revocation witness, the prover queries the verifier's revocation service with their subject number (`sn`). The service returns:
+- the Merkle path (sibling hashes) for the `sn` position in the SMT, and
+- the current `revocation_root`.
+
+The prover uses this Merkle path as the `revocation_witness` private input to prove non-inclusion of their `sn` in the revocation tree.
 
 Implementations MUST support at least one of:
 - an off-chain revocation root distributed by the CA (e.g., derived from a CRL),
@@ -136,7 +149,7 @@ Concatenation MUST be length-prefixed (e.g., `len(x)||x||len(y)||y||...`) to avo
 Implementations MUST:
 
 1. Obtain `challenge`, `app_id`, and the current `revocation_root` from the verifier context.
-2. Obtain a non-inclusion witness from the revocation SMT for the prover's certificate identifier.
+2. Query the verifier's revocation service with the prover's `sn` (subject number) to obtain the SMT Merkle path (sibling hashes) and current `revocation_root`. This Merkle path serves as the non-inclusion witness.
 3. Construct circuit inputs from the certificate `S`, RSA signature `σ`, trusted CA public keys, and the revocation witness.
 4. Generate a proof for the statement in [Circuit Design](#circuit-design).
 5. Submit the proof and public inputs to the verifier.
@@ -148,8 +161,9 @@ Implementations MUST:
 - `S`: Certificate message (certificate data).
 - `σ`: RSA signature over the TBS (To-Be-Signed) data.
 - `subjectDN`: Subject distinguished name extracted from `S`.
+- `sn`: Subject number extracted from `S`, used for revocation lookup.
 - `PK_cert`: Public key extracted from the end-entity certificate, used to verify the certificate was issued by the intermediate CA (`PK_CA`).
-- `revocation_witness`: SMT non-inclusion proof (sibling path and leaf preimage) for the prover's certificate identifier.
+- `revocation_witness`: SMT non-inclusion proof (Merkle path of sibling hashes) for the prover's `sn`, obtained from the verifier's revocation service.
 
 ### Public Inputs
 
@@ -193,7 +207,7 @@ The proof MUST bind to `challenge` as a public input.
 Prove the certificate has not been revoked:
 
 ```
-revoked_id := Poseidon( Encode(subjectDN) )
+revoked_id := Poseidon( Encode(sn) )
 assert( SMT_NonInclusion(revocation_root, revoked_id, revocation_witness) == 1 )
 ```
 
@@ -312,7 +326,7 @@ The protocol assumes:
 - Collision resistance of SHA-256 (for TBS hashing) and Poseidon (for nullifier derivation and revocation leaf computation).
 - Correct and unique domain separation via `app_id`.
 - Correct canonical encoding via `Encode()` (base64, standard alphabet, with padding).
-- Freshness of the revocation SMT root (i.e., the root reflects the latest CRL published by the CA).
+- Freshness of the revocation SMT root (i.e., the root reflects the latest CRL published by the CA). The prover trusts that the verifier periodically fetches the CRL from the CA or a trusted updater and rebuilds the SMT accordingly.
 - The `subjectDN` contains a secret unique identifier not publicly available; if `subjectDN` were guessable, an adversary could compute nullifiers for targeted users.
 
 ## Privacy and Security Best Practices
@@ -335,6 +349,13 @@ In on-chain mode:
 - Verification timing is public.
 - Transaction sender addresses may be linkable.
 - Domain separation via `app_id` is REQUIRED, but does not eliminate all metadata leakage.
+
+## Revocation Witness Retrieval Metadata
+
+When the prover queries the verifier's revocation service with their `sn` to obtain the non-inclusion witness, the verifier learns which `sn` is being checked. Since `sn` (subject number) does not directly reveal the prover's identity, this is considered an acceptable trade-off. However, deployments SHOULD be aware that repeated queries for the same `sn` could enable tracking.
+
+- Implementations MAY mitigate this by allowing batch retrieval of multiple SMT paths, or by using a privacy-preserving query mechanism.
+- The `sn` MUST NOT be logged alongside other identifying metadata (e.g., IP address, wallet address) by the revocation service.
 
 ## Revocation Freshness
 
@@ -399,6 +420,10 @@ A verifier-provided nonce bound to the proof to prevent replay.
 ## Revocation List
 
 A set of certificate identifiers that have been invalidated by the issuing CA, represented as a Sparse Merkle Tree for ZK-compatible non-inclusion proofs.
+
+## Subject Number (`sn`)
+
+A certificate field distinct from `subjectDN`, used as the key for revocation lookups. The `sn` does not directly reveal the prover's identity and is used to query the revocation service for a non-inclusion witness.
 
 ## Sparse Merkle Tree (SMT)
 
