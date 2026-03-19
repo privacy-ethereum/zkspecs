@@ -1,6 +1,8 @@
 # zkspecs
 
-Specifications for ZK and programmable cryptography protocols, following a [COSS-based](specs/1/README.md) editorial process. See the [HackMD](https://hackmd.io/UdMwH3nES8qTkRBOn02L8w) for broader context.
+Specifications for privacy, verifiability, and programmable cryptography protocols, following a [COSS-based](specs/1/README.md) editorial process. See the [HackMD](https://hackmd.io/UdMwH3nES8qTkRBOn02L8w) for broader context.
+
+These specs aim to keep Ethereum's access paths censorship-resistant, ownerless, private, and secure — covering identity and credentials, anonymous signaling, private reads and writes, credential portability, and more.
 
 ## Specifications
 
