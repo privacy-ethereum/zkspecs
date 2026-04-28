@@ -26,7 +26,7 @@ interpreted as described in [RFC 2119](https://www.ietf.org/rfc/rfc2119.txt).
 
 This specification defines a privacy-preserving protocol that allows a user to prove possession of a valid issuer-signed certificate and obtain a one-time "verified human" status on an online forum without disclosing certificate attributes.
 
-The protocol prevents duplicate verification via a deterministic nullifier. Off-chain verification is the default deployment mode; on-chain verification via a smart contract registry serves as a fallback. Both modes MUST be supported by a conforming deployment.
+The protocol prevents duplicate verification via a deterministic nullifier. Off-chain verification is the deployment mode for this version. On-chain verification was evaluated and is deferred (see [On-Chain Verification Status](#on-chain-verification-status)).
 
 The proof generation pipeline builds on OpenAC ([paper](https://github.com/privacy-ethereum/zkID/blob/main/paper/zkID.pdf)), adopting a minimal profile: RSA certificate chain validation, nullifier-based duplicate prevention, and SMT-based revocation. Features such as unlinkability and device binding are not in scope for this version but MAY be incorporated in future revisions.
 
@@ -52,9 +52,8 @@ A certificate `S` is a structured message containing a subject distinguished nam
 - `sn` (subject number): A distinct field from `subjectDN`, used as the key for revocation lookups. The `sn` does not directly reveal the prover's identity.
 
 The certificate MUST be issued by a trusted Certificate Authority (CA). The issuer's public key `PK_I` MUST be verifiable through a certificate chain rooted in one of:
-- hardcoded trusted CA root certificates (e.g., government root CA),
-- a platform-managed CA allowlist, or
-- an on-chain CA key registry (see [On-Chain Registry Variant](#on-chain-registry-variant)).
+- hardcoded trusted CA root certificates (e.g., government root CA), or
+- a platform-managed CA allowlist.
 
 The certificate chain consists of:
 - `PK_CA`: The public key from the intermediate CA certificate, which signs the end-entity certificate.
@@ -72,21 +71,24 @@ A revocation list is maintained as a **Sparse Merkle Tree (SMT)** where each lea
 revoked_leaf := Poseidon( Encode(sn) )
 ```
 
-The verifier maintains the full SMT off-chain, constructed from the CA's Certificate Revocation List (CRL) or an equivalent revocation feed. The verifier MUST periodically fetch the latest CRL from the CA or a trusted updater and rebuild the SMT accordingly. Only the SMT root (`revocation_root`) is stored on-chain in a smart contract (or distributed off-chain by the CA).
-
-The prover trusts that the verifier keeps the revocation tree up to date. This trust assumption is documented in [Security Considerations](#revocation-freshness).
+A trusted party (e.g., the CA or a designated updater) MUST maintain and publish the full SMT, constructed from the CA's Certificate Revocation List (CRL) or an equivalent revocation feed. The published SMT state MUST be periodically rebuilt from the latest CRL. Only the SMT root (`revocation_root`) needs to be distributed for verification; the full tree state is distributed as a downloadable snapshot for client-side proof generation.
 
 #### Witness Retrieval
 
-To obtain a revocation witness, the prover queries the verifier's revocation service with their subject number (`sn`). The service returns:
-- the Merkle path (sibling hashes) for the `sn` position in the SMT, and
-- the current `revocation_root`.
+To preserve privacy, the prover MUST generate the revocation non-inclusion witness locally. The prover MUST NOT send their `sn` to a remote service for witness retrieval.
 
-The prover uses this Merkle path as the `revocation_witness` private input to prove non-inclusion of their `sn` in the revocation tree.
+The client-side witness retrieval flow is:
 
-Implementations MUST support at least one of:
-- an off-chain revocation root distributed by the CA (e.g., derived from a CRL),
-- an on-chain revocation root stored in a smart contract (see [On-Chain Registry Variant](#on-chain-registry-variant)).
+1. Download the compressed SMT snapshot to the local device.
+2. Import the snapshot into a local disk-backed SMT (e.g., SQLite).
+3. Generate the non-membership Merkle path (sibling hashes) for the prover's `sn` position locally.
+4. Verify that the locally computed `revocation_root` matches the published reference root.
+5. Use the locally generated Merkle path as the `revocation_witness` private input.
+6. Clean up local SMT data after proof generation.
+
+The `sn` MUST NOT leave the prover's device during this process.
+
+Implementations MUST support an off-chain revocation root distributed by the CA or a trusted updater (e.g., derived from a CRL). The snapshot distribution mechanism is implementation-defined (e.g., CDN, IPFS, or a public repository).
 
 ### 3. Challenge (Anti-replay)
 
@@ -141,16 +143,17 @@ Concatenation MUST be length-prefixed (e.g., `len(x)||x||len(y)||y||...`) to avo
 
 ### Proving System
 
-- **Off-chain (default)**: Spartan2 with Hyrax polynomial commitment scheme. This is a transparent proving system (no trusted setup required).
-- **On-chain (fallback)**: Groth16. The target curve is under development; candidates include curves compatible with OpenAC (e.g., secp256r1). Groth16 requires a trusted setup; implementations MUST document the ceremony used.
+- Spartan2 with Hyrax polynomial commitment scheme. This is a transparent proving system (no trusted setup required).
+
+On-chain verification is not supported in this version. See [On-Chain Verification Status](#on-chain-verification-status) for the research summary and rationale.
 
 ## Protocol Flow
 
 Implementations MUST:
 
 1. Obtain `challenge`, `app_id`, and the current `revocation_root` from the verifier context.
-2. Query the verifier's revocation service with the prover's `sn` (subject number) to obtain the SMT Merkle path (sibling hashes) and current `revocation_root`. This Merkle path serves as the non-inclusion witness.
-3. Construct circuit inputs from the certificate `S`, RSA signature `σ`, trusted CA public keys, and the revocation witness.
+2. Download the SMT snapshot and generate the revocation non-inclusion witness locally (see [Witness Retrieval](#witness-retrieval)). Verify that the locally computed root matches the published `revocation_root`.
+3. Construct circuit inputs from the certificate `S`, RSA signature `σ`, trusted CA public keys, and the locally generated revocation witness.
 4. Generate a proof for the statement in [Circuit Design](#circuit-design).
 5. Submit the proof and public inputs to the verifier.
 
@@ -163,7 +166,7 @@ Implementations MUST:
 - `subjectDN`: Subject distinguished name extracted from `S`.
 - `sn`: Subject number extracted from `S`, used for revocation lookup.
 - `PK_cert`: Public key extracted from the end-entity certificate, used to verify the certificate was issued by the intermediate CA (`PK_CA`).
-- `revocation_witness`: SMT non-inclusion proof (Merkle path of sibling hashes) for the prover's `sn`, obtained from the verifier's revocation service.
+- `revocation_witness`: SMT non-inclusion proof (Merkle path of sibling hashes) for the prover's `sn`, generated locally from a downloaded SMT snapshot (see [Witness Retrieval](#witness-retrieval)).
 
 ### Public Inputs
 
@@ -239,11 +242,9 @@ A minimal proof object SHOULD include:
 - Validate the zero-knowledge proof against the public inputs.
 - Validate challenge freshness (not expired).
 - Enforce `app_id` matches the expected policy for the verification endpoint.
-- Validate that `revocation_root` matches the latest known revocation tree root (from the CA's CRL or an on-chain registry).
-
-### Verifier SHOULD
-
+- Validate that `revocation_root` matches the latest known revocation tree root (from the CA's CRL or a trusted updater).
 - Check whether the nullifier has already been used and reject duplicates.
+- Persist nullifier state durably (i.e., nullifier rejection MUST survive verifier restarts).
 
 ### Verifier MAY
 
@@ -286,34 +287,67 @@ A future version MAY derive nullifiers from a renewal-stable holder secret:
 nullifier := Poseidon( Encode(app_id || holder_secret) )
 ```
 
-## On-Chain Registry Variant
+## On-Chain Verification Status
 
-In the on-chain verification mode, a smart contract MAY act as the verifier and registry.
+On-chain verification was a design goal for this protocol (trustless nullifier registry, public verifiability). Extensive research and implementation work was conducted to evaluate feasibility. This section documents the findings and the rationale for deferring on-chain verification in this version.
 
-A contract MUST maintain:
+OpenAC has three core properties that MUST NOT be compromised:
 
-```
-mapping(bytes32 => bool) nullifierUsed
-```
+1. **Rerandomizable proofs** — required for unlinkability across presentations.
+2. **Transparent setup** — no trusted setup ceremony required.
+3. **Zero knowledge** — no credential attributes disclosed.
 
-A contract MAY additionally store:
-- `PK_I` (issuer public key) or a commitment to an issuer allowlist.
-- `revocationRoot` (`bytes32`): the current root of the revocation SMT, updated by a trusted updater role when the CA publishes a new CRL.
+The circuit size is ~2^20 constraints. The current design uses Spartan2 with Hyrax PCS over the T256 (secp256r1) curve. No EVM chain provides native T256 ecAdd/ecMul precompiles; RIP-7212 / EIP-7951 exposes only `ECDSA.verify(hash, r, s, x, y)`, which cannot be used for the arbitrary curve arithmetic that Hyrax and IPA require.
 
-Verification procedure:
+### Approaches Evaluated
 
-1. Verify the zero-knowledge proof.
-2. Ensure `nullifierUsed[nullifier] == false`.
-3. Set `nullifierUsed[nullifier] = true`.
-4. Emit an event:
+**1. Native Rust Verifier.** A self-contained Spartan2 verifier was built in Rust, independent of any external proving infrastructure. This serves as the foundation for off-chain verification and was used to validate subsequent on-chain approaches.
 
-```
-VerificationRegistered(nullifier, app_id)
-```
+**2. SP1 Wrapper.** The native verifier was wrapped inside SP1 to generate a succinct proof of verification. This direction was abandoned due to: (a) no T256 precompiles available in SP1, (b) prohibitive credit cost (~44 credits per proof), and (c) no provers accepting jobs at the required resource limits. Cost scales proportionally with complexity, making this economically unviable.
 
-No certificate attributes MUST be stored on-chain.
+**3. L2 Landscape Investigation.** All major L2s were surveyed for P-256 curve arithmetic support:
 
-Implementations MUST NOT store proofs on-chain for later reuse. Each verification MUST generate a fresh proof bound to a new challenge.
+| Chain | RIP-7212 (Sig Verify) | P-256 ecAdd/ecMul | Useful for Spartan2? |
+| --- | --- | --- | --- |
+| Arbitrum | Yes | No | Yes, via Stylus |
+| Optimism/Base | Yes | No | No |
+| zkSync Era | Yes | No | No |
+| Polygon PoS | Yes | No | No |
+| Scroll/Linea | Partial | No | No |
+
+No L2 currently provides the general-purpose P-256 curve arithmetic required. The only viable path is Arbitrum Stylus, which runs a WASM VM alongside the EVM with ~10–100x cheaper compute for cryptographic operations.
+
+**4. Groth16 with the same R1CS circuits.** Reuse existing circuits, add a per-circuit trusted setup. Cheapest on-chain cost (~$0.003), but breaks transparent setup.
+
+**5. Spartan2 + SPARK (native Solidity verifier).** SPARK preprocessing eliminates matrix storage but barely reduces per-verification gas (~3.7% savings). Estimated cost: ~200M gas on Arbitrum (~$20) for 2^20 constraints. Prohibitively expensive because every T256 curve operation runs as Solidity bytecode.
+
+**6. Spartan2 + SPARK + WHIR.** Replace Hyrax PCS with WHIR (hash-based PCS). Cheaper verification (~$0.03–$0.93 batched), but WHIR is not additively homomorphic — breaks rerandomizable proofs.
+
+**7. Spartan2 → Groth16 wrapper.** Verify the Spartan proof inside a Groth16 circuit. Cheap on-chain verification, but reintroduces trusted setup and adds 30–120s prover overhead.
+
+**8. Spartan2 + KZG.** Replace Hyrax with KZG (e.g., HyperKZG). Cheap on-chain verification (~$0.01–$0.05), preserves rerandomization and ZK, but requires trusted setup / universal SRS.
+
+**9. Arbitrum Stylus Verifier (Rust → WASM).** A fully self-contained Spartan2 verifier was built targeting Stylus with custom T256 field and curve arithmetic, no external crypto dependencies, compiled to WASM, and deployed on Arbitrum Sepolia ([0xfcd5fc2da39f4dc822835f99b5a70d12e32b24fd](https://sepolia.arbiscan.io/address/0xfcd5fc2da39f4dc822835f99b5a70d12e32b24fd#code)). This preserves all three core properties. However, it is currently blocked: Stylus caps contracts at 24 KB brotli-compressed (current build is ~349 KB uncompressed), and RPC clients reject the ~100 KB calldata required for proof submission.
+
+### Summary
+
+| Option | Transparent Setup | Rerandomizable | ZK | On-Chain Cost | Status |
+| --- | --- | --- | --- | --- | --- |
+| Groth16 | No | Yes | Yes | ~$0.003 | Breaks transparent setup |
+| Spartan2 + SPARK (Solidity) | Yes | Yes | Yes | ~$20 | Prohibitively expensive |
+| Spartan2 + SPARK + WHIR | Yes | No | Yes | ~$0.03–$0.93 | Breaks rerandomization |
+| Spartan2 → Groth16 wrapper | No | Yes | Yes | ~$0.003 | Breaks transparent setup |
+| Spartan2 + KZG | No | Yes | Yes | ~$0.01–$0.05 | Breaks transparent setup |
+| SP1 wrapper | Yes | Yes | Yes | N/A | Economically unviable |
+| Arbitrum Stylus | Yes | Yes | Yes | TBD | Blocked (contract size + calldata) |
+
+Only two options preserve all three core properties: Spartan2 + SPARK as a Solidity contract (prohibitively expensive) and Arbitrum Stylus (blocked on contract size and calldata limits). Every other option compromises at least one core property.
+
+### Conclusion
+
+On-chain verification is deferred for this version. Off-chain verification via Spartan2 with Hyrax PCS is the only conformance mode. A future version MAY revisit on-chain verification if the Stylus size blocker is resolved or if L2s add native P-256 curve arithmetic precompiles.
+
+For the full research details, see [Exploring Spartan2 Proofs for On-Chain Verification](https://github.com/zkmopro/zkID/blob/main/wallet-unit-poc/onchain-research.md).
 
 # Security Considerations
 
@@ -321,49 +355,37 @@ Implementations MUST NOT store proofs on-chain for later reuse. Each verificatio
 
 The protocol assumes:
 
-- The security of Spartan2 with Hyrax polynomial commitment scheme for off-chain verification (transparent setup — no trusted setup required), and the security of Groth16 for on-chain verification (requires trusted setup).
+- The security of Spartan2 with Hyrax polynomial commitment scheme (transparent setup — no trusted setup required).
 - The unforgeability of the RSA signature scheme (RSA-2048, PKCS#1 v1.5) used for certificate signing.
 - Collision resistance of SHA-256 (for TBS hashing) and Poseidon (for nullifier derivation and revocation leaf computation).
 - Correct and unique domain separation via `app_id`.
 - Correct canonical encoding via `Encode()` (base64, standard alphabet, with padding).
-- Freshness of the revocation SMT root (i.e., the root reflects the latest CRL published by the CA). The prover trusts that the verifier periodically fetches the CRL from the CA or a trusted updater and rebuilds the SMT accordingly.
+- Freshness of the revocation SMT snapshot (i.e., the snapshot reflects the latest CRL published by the CA). The prover downloads the snapshot locally and verifies the computed root against a published reference root. Freshness depends on the snapshot distribution frequency.
 - The `subjectDN` contains a secret unique identifier not publicly available; if `subjectDN` were guessable, an adversary could compute nullifiers for targeted users.
 
 ## Privacy and Security Best Practices
 
 - Proof generation SHOULD be performed on the user's device to reduce risk of certificate exposure.
+- Revocation witness generation MUST be performed locally on the user's device (see [Witness Retrieval](#witness-retrieval)).
 - Verifiers SHOULD minimize logging of public inputs, particularly nullifier, to reduce metadata retention.
-- Deployments using the on-chain registry SHOULD use relayers or transaction sponsorship to reduce linkage between proof submissions and wallet addresses.
 
 ## Linkability
 
-### Off-chain mode
+The nullifier is only visible to the forum platform verifier. Domain separation via `app_id` is REQUIRED to prevent cross-platform nullifier correlation.
 
-In off-chain mode, the nullifier is only visible to the forum platform verifier.
+## Revocation Witness Privacy
 
-### On-chain mode
+Client-side witness generation (see [Witness Retrieval](#witness-retrieval)) ensures that the prover's `sn` never leaves the device. This eliminates the metadata leakage risk present in server-side witness retrieval models, where the server would learn which `sn` is being checked.
 
-In on-chain mode:
-
-- Nullifiers are publicly observable.
-- Verification timing is public.
-- Transaction sender addresses may be linkable.
-- Domain separation via `app_id` is REQUIRED, but does not eliminate all metadata leakage.
-
-## Revocation Witness Retrieval Metadata
-
-When the prover queries the verifier's revocation service with their `sn` to obtain the non-inclusion witness, the verifier learns which `sn` is being checked. Since `sn` (subject number) does not directly reveal the prover's identity, this is considered an acceptable trade-off. However, deployments SHOULD be aware that repeated queries for the same `sn` could enable tracking.
-
-- Implementations MAY mitigate this by allowing batch retrieval of multiple SMT paths, or by using a privacy-preserving query mechanism.
-- The `sn` MUST NOT be logged alongside other identifying metadata (e.g., IP address, wallet address) by the revocation service.
+The prover downloads the full SMT snapshot, which is a public dataset derived from the CA's CRL. Downloading the snapshot does not reveal which certificate the prover holds.
 
 ## Revocation Freshness
 
-There is an inherent delay between a CA revoking a certificate (publishing a new CRL) and the revocation SMT root being updated. During this window, a revoked certificate can still produce valid proofs.
+There is an inherent delay between a CA revoking a certificate (publishing a new CRL), the SMT snapshot being rebuilt, and the prover downloading the updated snapshot. During this window, a revoked certificate can still produce valid proofs.
 
 - Verifiers SHOULD define a maximum acceptable `revocation_root` age.
-- On-chain deployments SHOULD emit a `RevocationRootUpdated(bytes32 newRoot, uint256 timestamp)` event to allow verifiers to track freshness.
-- Off-chain deployments SHOULD include the CRL publication timestamp alongside the `revocation_root`.
+- Snapshot publishers SHOULD include the CRL publication timestamp alongside the `revocation_root`.
+- Provers SHOULD download the latest available snapshot before each verification attempt.
 
 ## Known Limitations
 
@@ -374,17 +396,22 @@ If certificate renewal changes `subjectDN`, a user MAY verify again.
 This version does not include device binding. Certificate sharing across devices is not cryptographically prevented.
 
 **Revocation latency (v0.1)**
-The revocation SMT root update is not real-time. The window between CRL publication and root update depends on the update mechanism (manual, automated, on-chain oracle). During this window, revoked certificates remain usable.
+The revocation SMT snapshot update is not real-time. The window between CRL publication and snapshot rebuild depends on the update mechanism (manual, automated). During this window, revoked certificates remain usable.
+
+**On-chain verification (v0.1)**
+On-chain verification is deferred for this version. See [On-Chain Verification Status](#on-chain-verification-status) for the full rationale.
 
 # Implementation Notes
 
-A work-in-progress reference implementation is available at [zkID](https://github.com/zkmopro/zkID).
+A reference implementation is available at [zkID](https://github.com/zkmopro/zkID). Implementation tasks and progress are tracked at [ZK-based-Human-Verification](https://github.com/zkmopro/ZK-based-Human-Verification/issues).
 
-A reference implementation MAY:
+The current implementation includes:
 
-- generate proofs client-side (web or native app),
-- verify proofs off-chain in a backend, and/or
-- verify proofs in an EVM verifier contract for the on-chain registry variant.
+- **Mobile native bindings** (iOS / Android) via [mopro-ffi](https://github.com/zkmopro/mopro), enabling client-side proof generation on mobile devices.
+- **Mobile proof generation flow** integrated with the [Ptt-iOS](https://github.com/Ptt-official-app/Ptt-iOS) and [Ptt-Android](https://github.com/Ptt-official-app/Ptt-Android) forum apps.
+- **WASM browser proof generation** via mopro, enabling client-side proof generation in web apps.
+- **Server backend verification** with OpenAC verification logic ported from Rust to Go for the BBS server backend.
+- **Client-side SMT revocation** with local snapshot download and local non-inclusion proof generation (see [Witness Retrieval](#witness-retrieval)).
 
 Implementations SHOULD provide test vectors for:
 
@@ -392,6 +419,52 @@ Implementations SHOULD provide test vectors for:
 - nullifier derivation,
 - signature verification inputs,
 - SMT non-inclusion proof generation and verification.
+
+## User Experience Guidelines
+
+The verification flow involves sensitive credential operations. Implementations SHOULD follow these guidelines to ensure users can make informed decisions about their data.
+
+### Privacy Communication
+
+The UI MUST clearly communicate the following at each stage of the flow:
+
+1. **What the user is verifying.** The user is using a government-issued certificate to verify eligibility for a forum badge. The specific eligibility condition (e.g., possession of a valid certificate from a trusted issuer) SHOULD be stated in plain language.
+2. **What stays on the device.** The full certificate data, PIN, and private key material never leave the device. Revocation status is checked locally. The UI MUST state this explicitly before and during proof generation.
+3. **What is sent to the verifier.** Only the public inputs required for verification (nullifier, challenge, revocation root, CA public key commitment, and the proof) are submitted. The UI SHOULD list these in user-facing terms (e.g., "information needed to confirm your eligibility") with raw field names available under a collapsed technical details section.
+4. **What is not sent.** Full certificate data, PIN, and raw personal identity details are not transmitted. The UI MUST state this on the consent / confirmation screen before submission.
+
+### Consent Before Submission
+
+Implementations MUST include an explicit consent step after proof generation and before submission to the verifier. This step MUST:
+
+- confirm that verification data has been prepared locally and has not yet been sent,
+- summarize what will and will not be sent,
+- require an explicit user action (e.g., button tap) to proceed with submission.
+
+### Technical Detail Separation
+
+Raw cryptographic values, proof-system internals, backend identifiers, and protocol-level field names (e.g., circuit names, proving key names, witness states, raw public input values) SHOULD NOT appear in the main UI by default.
+
+These values SHOULD be preserved in a collapsed "technical details" section for debugging and support purposes. Users SHOULD be able to copy diagnostic information from this section when reporting errors.
+
+### Error Handling UX
+
+Error states MUST:
+
+- display a user-readable title and plain-language explanation,
+- recommend a specific next action (retry, restart, or contact support),
+- include an error code for support reference,
+- NOT expose PIN, full certificate data, or raw private key material in error output.
+
+Diagnostic information sufficient for engineering debugging (e.g., error code, failing step, timestamp, browser/OS, verifier response status) SHOULD be available under a collapsed section or via a "copy diagnostic info" action.
+
+### PIN Safety
+
+When the verification flow requires PIN entry (e.g., for smartcard-based certificate access):
+
+- the UI MUST warn users about the lockout threshold before PIN entry,
+- the UI MUST display remaining PIN attempts after each incorrect entry, and
+- the UI MUST clearly distinguish between a session-level PIN unlock and a permanent card lockout.
 
 # References
 
@@ -402,6 +475,8 @@ Implementations SHOULD provide test vectors for:
 - [ZK Circuit Specification for Human Verification (prior art)](https://github.com/zkmopro/ZK-based-Human-Verification/issues/3)
 - [Revocation in zkID: Merkle Tree Based Approaches (PSE)](https://pse.dev/blog/revocation-in-zkid-merkle-tree-based-approaches)
 - [MOICA Certificate Revocation List](https://moica.nat.gov.tw/del.html)
+- [Client-side SMT proof generation for revocation privacy](https://github.com/zkmopro/ZK-based-Human-Verification/issues/16)
+- [Exploring Spartan2 Proofs for On-Chain Verification](https://github.com/zkmopro/zkID/blob/main/wallet-unit-poc/onchain-research.md)
 
 # Glossary
 
@@ -423,7 +498,7 @@ A set of certificate identifiers that have been invalidated by the issuing CA, r
 
 ## Subject Number (`sn`)
 
-A certificate field distinct from `subjectDN`, used as the key for revocation lookups. The `sn` does not directly reveal the prover's identity and is used to query the revocation service for a non-inclusion witness.
+A certificate field distinct from `subjectDN`, used as the key for revocation lookups. The `sn` does not directly reveal the prover's identity and is used locally to generate a non-inclusion witness from a downloaded SMT snapshot.
 
 ## Sparse Merkle Tree (SMT)
 
