@@ -420,6 +420,52 @@ Implementations SHOULD provide test vectors for:
 - signature verification inputs,
 - SMT non-inclusion proof generation and verification.
 
+## User Experience Guidelines
+
+The verification flow involves sensitive credential operations. Implementations SHOULD follow these guidelines to ensure users can make informed decisions about their data.
+
+### Privacy Communication
+
+The UI MUST clearly communicate the following at each stage of the flow:
+
+1. **What the user is verifying.** The user is using a government-issued certificate to verify eligibility for a forum badge. The specific eligibility condition (e.g., possession of a valid certificate from a trusted issuer) SHOULD be stated in plain language.
+2. **What stays on the device.** The full certificate data, PIN, and private key material never leave the device. Revocation status is checked locally. The UI MUST state this explicitly before and during proof generation.
+3. **What is sent to the verifier.** Only the public inputs required for verification (nullifier, challenge, revocation root, CA public key commitment, and the proof) are submitted. The UI SHOULD list these in user-facing terms (e.g., "information needed to confirm your eligibility") with raw field names available under a collapsed technical details section.
+4. **What is not sent.** Full certificate data, PIN, and raw personal identity details are not transmitted. The UI MUST state this on the consent / confirmation screen before submission.
+
+### Consent Before Submission
+
+Implementations MUST include an explicit consent step after proof generation and before submission to the verifier. This step MUST:
+
+- confirm that verification data has been prepared locally and has not yet been sent,
+- summarize what will and will not be sent,
+- require an explicit user action (e.g., button tap) to proceed with submission.
+
+### Technical Detail Separation
+
+Raw cryptographic values, proof-system internals, backend identifiers, and protocol-level field names (e.g., circuit names, proving key names, witness states, raw public input values) SHOULD NOT appear in the main UI by default.
+
+These values SHOULD be preserved in a collapsed "technical details" section for debugging and support purposes. Users SHOULD be able to copy diagnostic information from this section when reporting errors.
+
+### Error Handling UX
+
+Error states MUST:
+
+- display a user-readable title and plain-language explanation,
+- recommend a specific next action (retry, restart, or contact support),
+- include an error code for support reference,
+- NOT expose PIN, full certificate data, or raw private key material in error output.
+
+Diagnostic information sufficient for engineering debugging (e.g., error code, failing step, timestamp, browser/OS, verifier response status) SHOULD be available under a collapsed section or via a "copy diagnostic info" action.
+
+### PIN Safety
+
+When the verification flow requires PIN entry (e.g., for smartcard-based certificate access):
+
+- the UI MUST warn users about the lockout threshold before PIN entry,
+- the UI MUST display remaining PIN attempts after each incorrect entry, and
+- the UI MUST clearly distinguish between a session-level PIN unlock and a permanent card lockout.
+
 # References
 
 - [RFC 2119](https://www.ietf.org/rfc/rfc2119.txt)
