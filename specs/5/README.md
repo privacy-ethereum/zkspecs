@@ -28,7 +28,7 @@ This specification defines a privacy-preserving protocol that allows a user to p
 
 The protocol prevents duplicate verification via a deterministic nullifier. Off-chain verification is the deployment mode for this version. On-chain verification was evaluated and is deferred (see [On-Chain Verification Status](#on-chain-verification-status)).
 
-The proof generation pipeline builds on OpenAC ([paper](https://github.com/privacy-ethereum/zkID/blob/main/paper/zkID.pdf)), adopting a minimal profile: RSA certificate chain validation, nullifier-based duplicate prevention, and SMT-based revocation. Features such as unlinkability and device binding are not in scope for this version but MAY be incorporated in future revisions.
+The proof generation pipeline builds on OpenAC ([paper](https://github.com/privacy-ethereum/zkID/blob/main/paper/zkID.pdf)), adopting a minimal profile: RSA certificate chain validation, nullifier-based duplicate prevention, SMT-based revocation, and per-session unlinkability via blinded key commitments. The proof pipeline is split into two linked sub-circuits — a CertChain circuit for credential verification and a DeviceSig circuit for session binding and nullifier derivation.
 
 This version (v0.1) enforces one verification per certificate instance. If the certificate is periodically renewed and renewal modifies the certificate contents, the user MAY be able to verify again (known limitation).
 
@@ -102,25 +102,32 @@ Verifiers MUST provide a 256-bit `challenge` value per verification attempt.
 
 The protocol MUST output a deterministic nullifier to prevent duplicate verification.
 
-The nullifier is derived from the subject distinguished name:
+The nullifier is derived from the card's RSA signature over an application-bound message:
 
 ```
-nullifier := Poseidon( Encode(app_id || subjectDN) )
+nullifier := Poseidon( RSA_Sign_sk(app_id || subjectDN) )
 ```
 
 Where:
+- `RSA_Sign_sk` is the card's RSA signing operation using the user's private key `sk` (PKCS#1 v1.5, which is deterministic — same key + same message = same signature),
 - `app_id` is a platform identifier (domain separator),
-- `subjectDN` is the subject distinguished name extracted from the certificate. The `subjectDN` contains a secret unique identifier assigned by the issuing CA and is not publicly available information,
+- `subjectDN` is the subject distinguished name extracted from the certificate,
 - `Poseidon` is the Poseidon hash function (see [Cryptographic Primitives](#cryptographic-primitives)).
 
+The nullifier is computed in the DeviceSig circuit, not the CertChain circuit (see [Circuit Design](#circuit-design)).
+
+Because the nullifier derivation requires the card's private key, an adversary cannot compute nullifiers for targeted users even if the `subjectDN` is known. This prevents dictionary attacks against the nullifier.
+
 Each platform MUST use a unique `app_id`.
+
+A future version SHOULD add a domain-separation tag to the signed message (e.g., `"zkID-nullifier-v1" || app_id || subjectDN`) to prevent cross-protocol nullifier correlation when the same card key is used across multiple ZK protocols.
 
 ## Cryptographic Primitives
 
 This specification defines:
 
 - Hash function (data integrity): `SHA-256` for certificate TBS data hashing.
-- Hash function (nullifier): `Poseidon` hash, a ZK-friendly hash function optimized for arithmetic circuits (see [circomlib Poseidon](https://github.com/iden3/circomlib/blob/master/circuits/poseidon.circom)).
+- Hash function (nullifier, pk_commit): `Poseidon` hash over the secq256r1 scalar field, a ZK-friendly hash function optimized for arithmetic circuits. For hashing more than 3 field elements, implementations use `ChunkedPoseidonP256(N)` — a sponge construction wrapping `PoseidonP256(2)` that processes N field elements in chunks.
 - Signature verification: `RSA_Verify(PK, msg, σ) -> {0,1}` — RSA signature verification over SHA-256 hashed TBS data.
 - Sparse Merkle Tree non-inclusion: `SMT_NonInclusion(root, leaf, proof) -> {0,1}` — verifies that `leaf` is **not** present in the SMT committed to by `root` (see [PSE: Revocation in zkID](https://pse.dev/blog/revocation-in-zkid-merkle-tree-based-approaches)).
 - Encoding: `Encode()` is a deterministic canonical encoding function using base64 encoding. All implementations MUST use the same base64 encoding variant (standard alphabet, with padding) to ensure consistent nullifier derivation across verifiers.
@@ -131,14 +138,16 @@ Concatenation MUST be length-prefixed (e.g., `len(x)||x||len(y)||y||...`) to avo
 
 ### RSA
 
-- Key size: RSA-2048
+- Issuer CA key size: RSA-2048 or RSA-4096 (depending on certificate generation)
+- User key size: RSA-2048
 - Padding scheme: PKCS#1 v1.5
 - Hash algorithm: SHA-256
+- Maximum certificate length: 1536 bytes (24 SHA-256 blocks)
 
 ### Poseidon Hash
 
-- Implementation: [circomlib Poseidon](https://github.com/iden3/circomlib/blob/master/circuits/poseidon.circom)
-- Field: BN254 scalar field
+- Implementation: Poseidon over the secq256r1 scalar field (P-256 companion curve).
+- Implementations MUST use round constants generated for the secq256r1 field.
 - Implementations MUST use consistent round parameters (t, number of full/partial rounds) across all parties.
 
 ### Proving System
@@ -153,85 +162,186 @@ Implementations MUST:
 
 1. Obtain `challenge`, `app_id`, and the current `revocation_root` from the verifier context.
 2. Download the SMT snapshot and generate the revocation non-inclusion witness locally (see [Witness Retrieval](#witness-retrieval)). Verify that the locally computed root matches the published `revocation_root`.
-3. Construct circuit inputs from the certificate `S`, RSA signature `σ`, trusted CA public keys, and the locally generated revocation witness.
-4. Generate a proof for the statement in [Circuit Design](#circuit-design).
-5. Submit the proof and public inputs to the verifier.
+3. Generate fresh `pk_blind` (248-bit randomness) for this session.
+4. Sign the TBS data (containing `app_id || subjectDN`) with the card's RSA key to obtain `σ_device`.
+5. Construct CertChain circuit inputs from the certificate `S`, issuer CA signature `σ`, user public key, `pk_blind`, and the locally generated revocation witness.
+6. Construct DeviceSig circuit inputs from the TBS data, `σ_device`, user public key, `pk_blind`, and the `challenge`.
+7. Generate proofs for both circuits (see [Circuit Design](#circuit-design)).
+8. Submit both proofs and their public inputs to the verifier.
 
 ## Circuit Design
 
-### Private Inputs
+The proof pipeline is split into two linked sub-circuits: a **CertChain** circuit for credential verification and a **DeviceSig** circuit for session binding and nullifier derivation.
+
+### Relation Split
+
+Implementations MUST realize the proof pipeline as two linked circuits:
+
+1. **CertChain**: Verifies the certificate chain, checks revocation non-inclusion, extracts identity fields, and computes a blinded key commitment (`pk_commit`).
+2. **DeviceSig**: Verifies the card's RSA signature over the session TBS data, derives the nullifier, binds to the session challenge and `app_id`, and computes the same `pk_commit`.
+
+The two circuits are linked via `pk_commit`:
+
+```
+pk_commit := ChunkedPoseidonP256(user_pk_limbs[0..k] || pk_blind)
+```
+
+Where:
+- `user_pk_limbs` are the limbs of the user's RSA-2048 public key (`k=17` limbs),
+- `pk_blind` is fresh 248-bit randomness generated per session.
+
+Both circuits MUST compute `pk_commit` identically. The verifier MUST assert that the `pk_commit` from the CertChain proof equals the `pk_commit` from the DeviceSig proof.
+
+`pk_blind` provides cross-session unlinkability: even for the same user key, `pk_commit` differs across sessions, preventing the verifier from linking separate verification attempts.
+
+### Valid Configurations
+
+Exactly two configurations are supported, depending on the issuer CA key size:
+
+- **MOICA-G2**: `cert_chain_rs2048` + `device_sig_rs2048`
+- **MOICA-G3**: `cert_chain_rs4096` + `device_sig_rs2048`
+
+The DeviceSig circuit is always RSA-2048 because user keys are always RSA-2048.
+
+### CertChain Circuit
+
+#### Private Inputs
 
 - `S`: Certificate message (certificate data).
-- `σ`: RSA signature over the TBS (To-Be-Signed) data.
+- `σ`: RSA signature over the TBS (To-Be-Signed) data from the issuer CA.
 - `subjectDN`: Subject distinguished name extracted from `S`.
 - `sn`: Subject number extracted from `S`, used for revocation lookup.
-- `PK_cert`: Public key extracted from the end-entity certificate, used to verify the certificate was issued by the intermediate CA (`PK_CA`).
+- `PK_cert`: Public key extracted from the end-entity certificate.
+- `pk_blind`: Fresh 248-bit randomness for `pk_commit` blinding.
 - `revocation_witness`: SMT non-inclusion proof (Merkle path of sibling hashes) for the prover's `sn`, generated locally from a downloaded SMT snapshot (see [Witness Retrieval](#witness-retrieval)).
 
-### Public Inputs
+#### Public Inputs
 
-- `challenge: bytes32`
-- `app_id: <encoded string>`
-- `nullifier: bytes32`
-- `PK_CA`: Trusted CA public key from intermediate CA.
-- `revocation_root: bytes32`: Current root of the revocation Sparse Merkle Tree.
+- `pk_commit`: Blinded commitment to the user's public key.
+- `modulus[N]`: Issuer CA RSA modulus limbs (N=17 for RSA-2048, N=34 for RSA-4096).
+- `smtRoot: bytes32`: Current root of the revocation Sparse Merkle Tree.
 
-### Circuit Operations
+#### CertChain Operations
 
-The circuit MUST enforce:
+The CertChain circuit MUST enforce:
 
 1. **Certificate chain validation**
 
-Confirm that the end-entity certificate was issued by a trusted CA:
+   Confirm that the end-entity certificate was issued by a trusted CA:
 
-```
-isValid := RSA_Verify(PK_CA, TBS(S), σ)
-assert(isValid == 1)
-```
+   ```
+   isValid := RSA_Verify(issuer_modulus, TBS(S), σ)
+   assert(isValid == 1)
+   ```
 
 2. **Subject DN extraction**
 
-```
-subjectDN := ExtractSubjectDN(S)
-```
+   ```
+   subjectDN := ExtractSubjectDN(S)
+   ```
+
+3. **Serial number extraction**
+
+   ```
+   sn := ExtractSerialNumber(S)
+   ```
+
+4. **Revocation non-inclusion**
+
+   Prove the certificate has not been revoked:
+
+   ```
+   revoked_id := Poseidon( Encode(sn) )
+   assert( SMT_NonInclusion(smtRoot, revoked_id, revocation_witness) == 1 )
+   ```
+
+5. **pk_commit computation**
+
+   ```
+   pk_commit := ChunkedPoseidonP256(user_pk_limbs || pk_blind)
+   ```
+
+### DeviceSig Circuit
+
+#### Private Inputs
+
+- `TBS`: To-Be-Signed data for the device/credential signature.
+- `σ_device`: RSA signature from the user's card over the TBS data.
+- `user_pk_limbs`: Limbs of the user's RSA-2048 public key.
+- `pk_blind`: Same per-session randomness used in the CertChain circuit.
+
+#### Public Inputs
+
+- `pk_commit`: Blinded commitment to the user's public key (must match CertChain).
+- `nullifier: bytes32`: Derived from the card's RSA signature.
+- `app_id_packed`: Platform identifier packed as a single field element.
+- `challenge: bytes32`: Per-session challenge from the verifier.
+
+#### DeviceSig Operations
+
+The DeviceSig circuit MUST enforce:
+
+1. **Credential signature verification**
+
+   Verify the card's RSA signature over the TBS data:
+
+   ```
+   isValid := RSA_Verify(user_pk, TBS, σ_device)
+   assert(isValid == 1)
+   ```
+
+2. **pk_commit computation**
+
+   ```
+   pk_commit := ChunkedPoseidonP256(user_pk_limbs || pk_blind)
+   ```
+
+   This MUST produce the same value as the CertChain circuit.
 
 3. **Nullifier derivation**
 
-```
-nullifier := Poseidon( Encode(app_id || subjectDN) )
-```
+   ```
+   nullifier := Poseidon(σ_device)
+   ```
 
-4. **Challenge binding**
+4. **app_id binding**
 
-The proof MUST bind to `challenge` as a public input.
+   The `app_id` is extracted from the TBS data and packed as a single field element. The verifier MUST compare against the expected `app_id`.
 
-5. **Revocation non-inclusion**
+5. **Challenge binding**
 
-Prove the certificate has not been revoked:
-
-```
-revoked_id := Poseidon( Encode(sn) )
-assert( SMT_NonInclusion(revocation_root, revoked_id, revocation_witness) == 1 )
-```
+   The proof MUST bind to `challenge` as a public input. The circuit enforces binding via a Semaphore-style dummy square (`challengeSquared := challenge * challenge`).
 
 ### Outputs
 
-- `nullifier: bytes32`
+- `nullifier: bytes32` (from DeviceSig)
+- `pk_commit` (from both circuits, must be equal)
 
 ## Proof Output Format
 
-Implementations MUST serialize proof outputs in a deterministic format.
+Implementations MUST serialize proof outputs in a deterministic format. A complete verification submission consists of two linked proofs.
 
-A minimal proof object SHOULD include:
+A minimal proof submission object SHOULD include:
 
 ```text
 {
-  app_id: <string>,
-  challenge: bytes32,
-  nullifier: bytes32,
-  revocation_root: bytes32,
-  pk_ca: list<string>,
-  proof: bytes
+  cert_chain: {
+    proof: bytes,
+    public_inputs: {
+      pk_commit: field_element,
+      modulus: list<field_element>,
+      smt_root: bytes32
+    }
+  },
+  device_sig: {
+    proof: bytes,
+    public_inputs: {
+      pk_commit: field_element,
+      nullifier: bytes32,
+      app_id_packed: field_element,
+      challenge: bytes32
+    }
+  }
 }
 ```
 
@@ -239,10 +349,12 @@ A minimal proof object SHOULD include:
 
 ### Verifier MUST
 
-- Validate the zero-knowledge proof against the public inputs.
+- Validate both the CertChain proof and the DeviceSig proof against their respective public inputs.
+- Assert that `pk_commit` from the CertChain proof equals `pk_commit` from the DeviceSig proof (constant-time comparison).
+- Validate that `challenge` matches the session challenge issued by the verifier.
+- Validate that `app_id_packed` matches the expected platform identifier.
 - Validate challenge freshness (not expired).
-- Enforce `app_id` matches the expected policy for the verification endpoint.
-- Validate that `revocation_root` matches the latest known revocation tree root (from the CA's CRL or a trusted updater).
+- Validate that `smt_root` matches the latest known revocation tree root (from the CA's CRL or a trusted updater).
 - Check whether the nullifier has already been used and reject duplicates.
 - Persist nullifier state durably (i.e., nullifier rejection MUST survive verifier restarts).
 
@@ -277,15 +389,9 @@ Error responses MUST include:
 
 ## Certificate Renewal
 
-The nullifier is derived from `subjectDN`, which is stable across certificate renewals as long as the subject identity remains the same.
+The nullifier is derived from the card's RSA signature over `app_id || subjectDN`. If certificate renewal issues a new RSA key pair, the nullifier will change (different signing key produces a different signature). Therefore a user MAY be able to verify again after renewal if the renewal generates a new key pair.
 
-If the issuer renews/reissues certificates such that `subjectDN` changes, then the nullifier will change. Therefore a user MAY be able to verify again after renewal with a different `subjectDN`.
-
-A future version MAY derive nullifiers from a renewal-stable holder secret:
-
-```
-nullifier := Poseidon( Encode(app_id || holder_secret) )
-```
+If the renewal retains the same key pair and `subjectDN`, the nullifier remains stable.
 
 ## On-Chain Verification Status
 
@@ -356,12 +462,14 @@ For the full research details, see [Exploring Spartan2 Proofs for On-Chain Verif
 The protocol assumes:
 
 - The security of Spartan2 with Hyrax polynomial commitment scheme (transparent setup — no trusted setup required).
-- The unforgeability of the RSA signature scheme (RSA-2048, PKCS#1 v1.5) used for certificate signing.
-- Collision resistance of SHA-256 (for TBS hashing) and Poseidon (for nullifier derivation and revocation leaf computation).
+- The unforgeability of the RSA signature scheme (RSA-2048 and RSA-4096, PKCS#1 v1.5) used for certificate signing and credential signatures.
+- Collision resistance of SHA-256 (for TBS hashing) and Poseidon over secq256r1 (for nullifier derivation, pk_commit computation, and revocation leaf computation).
 - Correct and unique domain separation via `app_id`.
 - Correct canonical encoding via `Encode()` (base64, standard alphabet, with padding).
 - Freshness of the revocation SMT snapshot (i.e., the snapshot reflects the latest CRL published by the CA). The prover downloads the snapshot locally and verifies the computed root against a published reference root. Freshness depends on the snapshot distribution frequency.
-- The `subjectDN` contains a secret unique identifier not publicly available; if `subjectDN` were guessable, an adversary could compute nullifiers for targeted users.
+- The nullifier is derived from the card's RSA signature, which requires possession of the card's private key. An adversary cannot compute nullifiers without the card, even if the `subjectDN` is known.
+- Per-session `pk_blind` provides cross-session unlinkability. The blinding value MUST be fresh 248-bit randomness for each session. Reusing `pk_blind` across sessions would allow the verifier to link presentations.
+- A future version SHOULD add a domain-separation tag to the nullifier's signed message to prevent cross-protocol correlation when the same card key is used by multiple ZK protocols.
 
 ## Privacy and Security Best Practices
 
@@ -397,6 +505,9 @@ This version does not include device binding. Certificate sharing across devices
 
 **Revocation latency (v0.1)**
 The revocation SMT snapshot update is not real-time. The window between CRL publication and snapshot rebuild depends on the update mechanism (manual, automated). During this window, revoked certificates remain usable.
+
+**Dual-credential nullifier divergence (v0.1)**
+Holders of both a physical card and a digital credential have different RSA key pairs per credential. Since the nullifier is derived from the card's RSA signature, each credential produces a different nullifier, allowing one verification per credential type. This is a known, accepted trade-off.
 
 **On-chain verification (v0.1)**
 On-chain verification is deferred for this version. See [On-Chain Verification Status](#on-chain-verification-status) for the full rationale.
