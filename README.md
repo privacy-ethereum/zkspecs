@@ -13,6 +13,7 @@ These specs aim to keep Ethereum's access paths censorship-resistant, ownerless,
 | 3 | [3/SEMAPHORE-V4](specs/3/README.md) | draft | Anonymous group membership and signaling protocol |
 | 4 | [4/EXCUBIAE](specs/4/README.md) | draft | Composable attribute-based access control framework for EVM |
 | 5 | [5/ZK-HUMAN-VERIFICATION](specs/5/README.md) | raw | ZK-based human verification for online forums |
+| 6 | [6/OPENAC-CORE](specs/6/README.md) | raw | Two-phase anonymous-credential presentation protocol with SD-JWT/P-256 profile |
 
 Each spec follows a lifecycle from **Raw → Draft → Stable** as defined in [1/COSS](specs/1/README.md).
 
