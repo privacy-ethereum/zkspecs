@@ -2,6 +2,11 @@
 
 This note records how the raw `6/OPENAC-CORE` draft was derived.
 
+Primary external references:
+
+- [OpenAC whitepaper](https://github.com/privacy-ethereum/zkID/tree/main/paper)
+- [openac-sdk reference implementation](https://github.com/privacy-ethereum/zkID/tree/main/wallet-unit-poc/openac-sdk)
+
 ## Status Labels
 
 - `Implemented`: visible in the current `openac-sdk` behavior.

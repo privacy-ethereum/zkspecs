@@ -16,7 +16,7 @@ contributors:
 
 # Change Process
 
-This document is governed by the [1/COSS](../1) (COSS).
+This document is governed by the [1/COSS](https://github.com/privacy-ethereum/zkspecs/tree/main/specs/1) (COSS).
 
 # Language
 
@@ -32,13 +32,9 @@ OpenAC separates expensive credential validation work into a reusable
 `Prepare` phase and executes policy evaluation and device binding in a
 presentation-specific `Show` phase.
 
-This raw version specifies:
-
-- the OpenAC role model and trust boundaries;
-- the `Prepare`, `Show`, and proof-linking semantics;
-- a minimal verifier-facing proof bundle format;
-- verifier requirements; and
-- an `SD-JWT-P256` profile reflecting the current reference implementation.
+This raw version records a conservative OpenAC core surface: roles and trust
+boundaries, `Prepare` / `Show` / linking semantics, verifier-facing proof
+bundle handling, verifier requirements, and a current `SD-JWT-P256` profile.
 
 This version does not yet standardize revocation, nullifiers, on-chain
 verification, or non-SD-JWT credential profiles.
@@ -611,9 +607,12 @@ Future specifications MAY define:
 
 ## Implementation Status
 
-This raw specification is based on the current OpenAC whitepaper and the
-reference `openac-sdk` implementation. It remains intentionally conservative,
-but now resolves the main protocol-shape questions by:
+This raw specification is based on the current
+[OpenAC whitepaper](https://github.com/privacy-ethereum/zkID/tree/main/paper)
+and the reference
+[openac-sdk](https://github.com/privacy-ethereum/zkID/tree/main/wallet-unit-poc/openac-sdk)
+implementation. It remains intentionally conservative, but now resolves the
+main protocol-shape questions by:
 
 - keeping core scope narrow;
 - treating device-key exposure as a current implementation privacy caveat
