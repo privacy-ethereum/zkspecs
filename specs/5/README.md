@@ -163,7 +163,7 @@ Implementations MUST:
 1. Obtain `challenge`, `app_id`, and the current `revocation_root` from the verifier context.
 2. Download the SMT snapshot and generate the revocation non-inclusion witness locally (see [Witness Retrieval](#witness-retrieval)). Verify that the locally computed root matches the published `revocation_root`.
 3. Generate fresh `pk_blind` (248-bit randomness) for this session.
-4. Sign the TBS data (containing `app_id || subjectDN`) with the card's RSA key to obtain `σ_device`.
+4. Sign the TBS data (containing `app_id`) with the card's RSA key to obtain `σ_device`.
 5. Construct CertChain circuit inputs from the certificate `S`, issuer CA signature `σ`, user public key, `pk_blind`, and the locally generated revocation witness.
 6. Construct DeviceSig circuit inputs from the TBS data, `σ_device`, user public key, `pk_blind`, and the `challenge`.
 7. Generate proofs for both circuits (see [Circuit Design](#circuit-design)).
