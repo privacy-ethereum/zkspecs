@@ -127,7 +127,7 @@ A future version SHOULD add a domain-separation tag to the signed message (e.g.,
 This specification defines:
 
 - Hash function (data integrity): `SHA-256` for certificate TBS data hashing.
-- Hash function (nullifier, pk_commit): `Poseidon` hash over the secq256r1 scalar field, a ZK-friendly hash function optimized for arithmetic circuits. For hashing more than 3 field elements, implementations use `ChunkedPoseidonP256(N)` — a sponge construction wrapping `PoseidonP256(2)` that processes N field elements in chunks.
+- Hash function (nullifier, pk_commit): `Poseidon` hash over the secq256r1 scalar field, a ZK-friendly hash function optimized for arithmetic circuits. For hashing more than 16 field elements, implementations use `ChunkedPoseidonP256(N)` — a sponge construction wrapping `PoseidonP256(2)` that processes N field elements in chunks.
 - Signature verification: `RSA_Verify(PK, msg, σ) -> {0,1}` — RSA signature verification over SHA-256 hashed TBS data.
 - Sparse Merkle Tree non-inclusion: `SMT_NonInclusion(root, leaf, proof) -> {0,1}` — verifies that `leaf` is **not** present in the SMT committed to by `root` (see [PSE: Revocation in zkID](https://pse.dev/blog/revocation-in-zkid-merkle-tree-based-approaches)).
 - Encoding: `Encode()` is a deterministic canonical encoding function using base64 encoding. All implementations MUST use the same base64 encoding variant (standard alphabet, with padding) to ensure consistent nullifier derivation across verifiers.
