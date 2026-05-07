@@ -105,7 +105,7 @@ The protocol MUST output a deterministic nullifier to prevent duplicate verifica
 The nullifier is derived from the card's RSA signature over an application-bound message:
 
 ```
-nullifier := Poseidon( RSA_Sign_sk(app_id || subjectDN) )
+nullifier := Poseidon( RSA_Sign_sk(app_id) )
 ```
 
 Where:
