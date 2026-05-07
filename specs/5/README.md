@@ -521,7 +521,7 @@ The current implementation includes:
 - **Mobile native bindings** (iOS / Android) via [mopro-ffi](https://github.com/zkmopro/mopro), enabling client-side proof generation on mobile devices.
 - **Mobile proof generation flow** integrated with the [Ptt-iOS](https://github.com/Ptt-official-app/Ptt-iOS) and [Ptt-Android](https://github.com/Ptt-official-app/Ptt-Android) forum apps.
 - **WASM browser proof generation** via mopro, enabling client-side proof generation in web apps.
-- **Server backend verification** with OpenAC verification logic ported from Rust to Go for the BBS server backend.
+- **Server backend verification** with OpenAC verification logic ported from Rust to GO via FFI for the BBS server backend.
 - **Client-side SMT revocation** with local snapshot download and local non-inclusion proof generation (see [Witness Retrieval](#witness-retrieval)).
 
 Implementations SHOULD provide test vectors for:
