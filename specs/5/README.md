@@ -120,7 +120,7 @@ Because the nullifier derivation requires the card's private key, an adversary c
 
 Each platform MUST use a unique `app_id`.
 
-A future version SHOULD add a domain-separation tag to the signed message (e.g., `"zkID-nullifier-v1" || app_id || subjectDN`) to prevent cross-protocol nullifier correlation when the same card key is used across multiple ZK protocols.
+A future version SHOULD add a domain-separation tag to the signed message (e.g., `"zkID-nullifier-v1" || app_id`) to prevent cross-protocol nullifier correlation when the same card key is used across multiple ZK protocols.
 
 ## Cryptographic Primitives
 
