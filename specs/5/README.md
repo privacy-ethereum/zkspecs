@@ -389,7 +389,7 @@ Error responses MUST include:
 
 ## Certificate Renewal
 
-The nullifier is derived from the card's RSA signature over `app_id || subjectDN`. If certificate renewal issues a new RSA key pair, the nullifier will change (different signing key produces a different signature). Therefore a user MAY be able to verify again after renewal if the renewal generates a new key pair.
+The nullifier is derived from the card's RSA signature over `app_id`. If certificate renewal issues a new RSA key pair, the nullifier will change (different signing key produces a different signature). Therefore a user MAY be able to verify again after renewal if the renewal generates a new key pair.
 
 If the renewal retains the same key pair and `subjectDN`, the nullifier remains stable.
 
