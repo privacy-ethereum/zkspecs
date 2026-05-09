@@ -1,6 +1,6 @@
 # OpenAC Core Source Matrix
 
-This note records how the raw `6/OPENAC-CORE` draft was derived.
+This note records how the raw `7/OPENAC-CORE` draft was derived.
 
 Primary external references:
 
@@ -20,7 +20,7 @@ Primary external references:
 
 ## Matrix
 
-| Topic | Primary Source | Status | Treatment in `6/OPENAC-CORE` |
+| Topic | Primary Source | Status | Treatment in `7/OPENAC-CORE` |
 | --- | --- | --- | --- |
 | Two-phase `Prepare` / `Show` model | `openac-sdk` README, `paper/zkID_construction.tex` | Implemented | Normative core structure |
 | Linked proofs over shared witness values | `paper/zkID_construction.tex`, `src/wasm-bridge.ts` | Implemented | Normative requirement; construction remains abstract |

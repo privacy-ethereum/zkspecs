@@ -1,7 +1,7 @@
 # OpenAC Core Maintainer Decisions
 
 This note records the editorial decisions currently applied to
-`6/OPENAC-CORE` as it moves from `raw` toward `draft`.
+`7/OPENAC-CORE` as it moves from `raw` toward `draft`.
 
 ## 1. Canonical Scope
 

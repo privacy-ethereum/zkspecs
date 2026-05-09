@@ -1,6 +1,6 @@
 ---
-slug: 6
-title: 6/OPENAC-CORE
+slug: 7
+title: 7/OPENAC-CORE
 name: OpenAC Core Protocol
 status: raw
 category: Standards Track
@@ -9,9 +9,11 @@ tags:
   - anonymous-credentials
   - sd-jwt
   - device-binding
-editor: TBD
+editor: Nicole Yeh <Nicole.yeh@ethereum.org>
 contributors:
-  - TBD
+  - Nicole Yeh <Nicole.yeh@ethereum.org>
+  - Vikas Rushi <vikas.rushi@ethereum.org>
+  - Vivian Plasencia <vivian.plasencia@ethereum.org>
 ---
 
 # Change Process
