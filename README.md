@@ -29,8 +29,6 @@ ad hoc locations into one place over time.
 | Personhood | ZK Proof of Personhood | [`privacy-ethereum/zkID/specs/2-zk-proof-of-personhood`](https://github.com/privacy-ethereum/zkID/blob/main/specs/2-zk-proof-of-personhood/README.md) | Related to [`5/ZK-HUMAN-VERIFICATION`](specs/5/README.md), [#18](https://github.com/privacy-ethereum/zkspecs/pull/18), [#20](https://github.com/privacy-ethereum/zkspecs/pull/20), and [#24](https://github.com/privacy-ethereum/zkspecs/pull/24) | Adjacent Access Layer spec work |
 | Credentials | OpenAC Core | [`privacy-ethereum/zkID/specs/1-openac`](https://github.com/privacy-ethereum/zkID/blob/main/specs/1-openac/README.md) | Drafted in [#21](https://github.com/privacy-ethereum/zkspecs/pull/21) and [#23](https://github.com/privacy-ethereum/zkspecs/pull/23) | Protocol/spec material alongside implementation work |
 | Age verification | ZK Age Verification | [`privacy-ethereum/zkID/specs/3-zk-age-verification`](https://github.com/privacy-ethereum/zkID/blob/main/specs/3-zk-age-verification/README.md) | Related to `6/ZK-AGE-ELIGIBILITY` in [#19](https://github.com/privacy-ethereum/zkspecs/pull/19) | Adjacent Access Layer spec work |
-| Predicates | Generalized Predicates | [`privacy-ethereum/zkID/generalized-predicates`](https://github.com/privacy-ethereum/zkID/tree/main/generalized-predicates) | Candidate spec area | Predicate semantics, expression encoding, and compatibility rules |
-| Revocation | ZK Credential Revocation | [`privacy-ethereum/zkID/revocation`](https://github.com/privacy-ethereum/zkID/tree/main/revocation) | Candidate spec area | Revocation accumulators and non-membership proof flows |
 
 ## License
 
