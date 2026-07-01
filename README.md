@@ -12,7 +12,7 @@ These specs aim to keep Ethereum's access paths censorship-resistant, ownerless,
 | 2 | [2/ANON-AADHAAR-V2](specs/2/README.md) | draft | Privacy-preserving verification of Aadhaar identity cards using ZK proofs |
 | 3 | [3/SEMAPHORE-V4](specs/3/README.md) | draft | Anonymous group membership and signaling protocol |
 | 4 | [4/EXCUBIAE](specs/4/README.md) | draft | Composable attribute-based access control framework for EVM |
-| 5 | [5/ZK-HUMAN-VERIFICATION](specs/5/README.md) | raw | ZK-based human verification for online forums |
+| 5 | [5/ZK-PROOF-OF-PERSONHOOD](specs/5/README.md) | raw | ZK-based proof of personhood for online forums |
 
 Each spec follows a lifecycle from **Raw → Draft → Stable** as defined in [1/COSS](specs/1/README.md).
 
